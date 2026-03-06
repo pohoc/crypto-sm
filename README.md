@@ -17,6 +17,35 @@ composer require pohoc/crypto-sm
 - PHP >= 8.0
 - GMP 扩展
 
+### 安装 GMP 扩展
+
+**Ubuntu/Debian:**
+```bash
+sudo apt-get install php-gmp
+```
+
+**CentOS/RHEL:**
+```bash
+sudo yum install php-gmp
+```
+
+**macOS (Homebrew):**
+```bash
+brew install php@gmp
+```
+
+**Windows:**
+在 php.ini 中启用 php_gmp.dll 扩展（取消注释）:
+```ini
+extension=php_gmp.dll
+```
+
+**验证安装:**
+```php
+<?php
+var_dump(extension_loaded('gmp'));
+```
+
 ## 支持的算法
 
 ### SM2
