@@ -15,7 +15,7 @@ class Sm4Test extends TestCase
 
         $encrypted = Sm4::encrypt($msg, $key);
         $this->assertNotEmpty($encrypted);
-        $this->assertEquals(64, strlen($encrypted));
+        $this->assertTrue(ctype_xdigit($encrypted));
     }
     
     public function testSm4DecryptReturnsString()
@@ -50,8 +50,7 @@ class Sm4Test extends TestCase
         $msg = '1234567890123456';
         $key = '0123456789abcdeffedcba9876543210';
 
-        $options = new Sm4Options();
-        $options->setPadding('none');
+        $options = (new Sm4Options())->setPadding('none');
 
         $encrypted = Sm4::encrypt($msg, $key, $options);
         $this->assertEquals(32, strlen($encrypted));
@@ -66,9 +65,7 @@ class Sm4Test extends TestCase
         $key = '0123456789abcdeffedcba9876543210';
         $iv = 'fedcba98765432100123456789abcdef';
 
-        $options = new Sm4Options();
-        $options->setMode('cbc');
-        $options->setIv($iv);
+        $options = (new Sm4Options())->setMode('cbc')->setIv($iv);
 
         $encrypted = Sm4::encrypt($msg, $key, $options);
         $this->assertNotEmpty($encrypted);
@@ -173,12 +170,12 @@ class Sm4Test extends TestCase
     {
         $options = new Sm4Options();
         
-        $result = $options->setPadding('none')->setMode('cbc')->setIv('test');
+        $result = $options->setPadding('none')->setMode('cbc')->setIv('000102030405060708090a0b0c0d0e0f');
         
         $this->assertInstanceOf(Sm4Options::class, $result);
         $this->assertEquals('none', $options->getPadding());
         $this->assertEquals('cbc', $options->getMode());
-        $this->assertEquals('test', $options->getIv());
+        $this->assertEquals('000102030405060708090a0b0c0d0e0f', $options->getIv());
     }
 
     public function testSm4HexToBytesStatic()

@@ -8,15 +8,12 @@ use CryptoSm\SM3\Sm3;
 use CryptoSm\Utils\Hex;
 
 /**
- * SM2 cryptographic algorithm implementation.
- *
- * Supports encryption, decryption, signature, and verification
- * based on the Chinese national standard GM/T 0003-2012.
+ * SM2 椭圆曲线密码 (GM/T 0003-2012)
  */
 class Sm2
 {
-    public const CIPHER_MODE_1 = 1;
-    public const CIPHER_MODE_0 = 0;
+    public const CIPHER_MODE_1 = 1; // C1C3C2
+    public const CIPHER_MODE_0 = 0; // C1C2C3
 
     private static array $eccTable = [
         'n' => 'FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123',
@@ -27,49 +24,33 @@ class Sm2
         'gY' => 'bc3736a2f4f6779c59bdcee36b692153d0a9877cc62a474002df32e52139f0a0',
     ];
 
-    /**
-     * Generates an SM2 key pair in hexadecimal format.
-     */
     public static function generateKeyPairHex(): Keypair
     {
-        $keypair = self::generateKeyPair();
-        return new Keypair($keypair['privateKey'], $keypair['publicKey']);
+        $pair = self::generateKeyPair();
+        return new Keypair($pair['privateKey'], $pair['publicKey']);
     }
 
-    /**
-     * Generates an SM2 key pair.
-     */
     private static function generateKeyPair(): array
     {
         $n = gmp_init(self::$eccTable['n'], 16);
-
         do {
             $d = gmp_random_range(gmp_init(1), gmp_sub($n, gmp_init(1)));
         } while (gmp_cmp($d, 1) < 0 || gmp_cmp($d, $n) >= 0);
 
-        $privateKey = gmp_strval($d, 16);
-        $privateKey = str_pad($privateKey, 64, '0', STR_PAD_LEFT);
-
+        $privateKey = str_pad(gmp_strval($d, 16), 64, '0', STR_PAD_LEFT);
         $publicKey = self::pointMultiply($privateKey);
 
-        return [
-            'privateKey' => $privateKey,
-            'publicKey' => $publicKey,
-        ];
+        return ['privateKey' => $privateKey, 'publicKey' => $publicKey];
     }
 
-    /**
-     * Encrypts data using SM2 algorithm.
-     *
-     * @param string $data The plaintext data to encrypt
-     * @param string $publicKey The public key in hexadecimal format (128 characters)
-     * @param Sm2CipherOptions|null $options Cipher options
-     * @return string The encrypted ciphertext
-     */
     public static function doEncrypt(string $data, string $publicKey, ?Sm2CipherOptions $options = null): string
     {
-        $options = $options ?? new Sm2CipherOptions();
+        $options ??= new Sm2CipherOptions();
         $cipherMode = $options->getCipherMode();
+
+        if (!self::isOnCurve($publicKey)) {
+            throw new \InvalidArgumentException('Invalid public key');
+        }
 
         do {
             $k = bin2hex(random_bytes(32));
@@ -79,46 +60,37 @@ class Sm2
             $y1 = substr($x1y1, 64);
             $C1 = $x1y1;
 
-            $x2y1 = self::pointMultiply($publicKey, $k);
-            $x2 = substr($x2y1, 0, 64);
-            $y2 = substr($x2y1, 64);
+            $x2y2 = self::pointMultiply($publicKey, $k);
+            $x2 = substr($x2y2, 0, 64);
+            $y2 = substr($x2y2, 64);
 
             $dataLen = strlen($data);
             $t = self::kdf($x2 . $y2, $dataLen);
+            if (self::isAllZero($t)) {
+                continue;
+            }
 
             $C2 = '';
             for ($i = 0; $i < $dataLen; $i++) {
                 $C2 .= chr(ord($data[$i]) ^ ord($t[$i]));
             }
-            $C2Bin = $C2;
-            $C2 = bin2hex($C2);
-
+            $C2Hex = bin2hex($C2);
             $C3 = Sm3::sm3(Hex::fromHex($x2) . $data . Hex::fromHex($y2));
-        } while (strpos($t, "\0") !== false);
+        } while (false);
 
-        if ($cipherMode === self::CIPHER_MODE_1) {
-            return $C1 . $C3 . $C2;
-        } else {
-            return $C1 . $C2 . $C3;
-        }
+        return $cipherMode === self::CIPHER_MODE_1 ? $C1 . $C3 . $C2Hex : $C1 . $C2Hex . $C3;
     }
 
-    /**
-     * Decrypts data using SM2 algorithm.
-     *
-     * @param string $data The ciphertext data to decrypt
-     * @param string $privateKey The private key in hexadecimal format (64 characters)
-     * @param Sm2CipherOptions|null $options Cipher options
-     * @return string The decrypted plaintext
-     * @throws \Exception If decryption fails
-     */
     public static function doDecrypt(string $data, string $privateKey, ?Sm2CipherOptions $options = null): string
     {
-        $options = $options ?? new Sm2CipherOptions();
+        $options ??= new Sm2CipherOptions();
         $cipherMode = $options->getCipherMode();
 
-        $C1 = substr($data, 0, 128);
+        if (strlen($data) < 192 || strlen($data) % 2 !== 0) {
+            throw new \InvalidArgumentException('Invalid ciphertext');
+        }
 
+        $C1 = substr($data, 0, 128);
         if ($cipherMode === self::CIPHER_MODE_1) {
             $C3 = substr($data, 128, 64);
             $C2 = substr($data, 192);
@@ -127,21 +99,30 @@ class Sm2
             $C3 = substr($data, -64);
         }
 
-        $x2y1 = self::pointMultiply($C1, $privateKey);
-        $x2 = substr($x2y1, 0, 64);
-        $y2 = substr($x2y1, 64);
+        $p = gmp_init(self::$eccTable['p'], 16);
+        $a = gmp_init(self::$eccTable['a'], 16);
+        $C1Point = self::parsePoint($C1);
+        if ($C1Point === null || !self::isOnCurve($C1)) {
+            throw new \InvalidArgumentException('Invalid C1');
+        }
+
+        $x2y2 = self::pointMultiply($C1, $privateKey);
+        $x2 = substr($x2y2, 0, 64);
+        $y2 = substr($x2y2, 64);
 
         $dataLen = strlen($C2) / 2;
         $t = self::kdf($x2 . $y2, $dataLen);
+        if (self::isAllZero($t)) {
+            throw new \Exception('KDF derived all-zero key');
+        }
 
-        $C2Bin = Hex::fromHex($C2);
         $M = '';
+        $C2Bin = Hex::fromHex($C2);
         for ($i = 0; $i < $dataLen; $i++) {
             $M .= chr(ord($C2Bin[$i]) ^ ord($t[$i]));
         }
 
         $u = Sm3::sm3(Hex::fromHex($x2) . $M . Hex::fromHex($y2));
-
         if ($u !== $C3) {
             throw new \Exception('Verification failed');
         }
@@ -149,224 +130,82 @@ class Sm2
         return $M;
     }
 
-    /**
-     * Signs data using SM2 algorithm.
-     *
-     * @param string $data The data to sign
-     * @param string $privateKey The private key in hexadecimal format (64 characters)
-     * @param SignatureOptions|null $options Signature options
-     * @return string The signature in hexadecimal format (128 chars) or DER format
-     */
     public static function doSignature(string $data, string $privateKey, ?SignatureOptions $options = null): string
     {
-        $options = $options ?? new SignatureOptions();
+        $options ??= new SignatureOptions();
 
         $der = $options->getDer();
         $hash = $options->getHash();
         $publicKey = $options->getPublicKey();
         $userId = $options->getUserId();
 
-        $e = '';
-        $x = '';
-        $y = '';
-
-        if ($hash) {
-            if ($publicKey) {
-                $x = substr($publicKey, 0, 64);
-                $y = substr($publicKey, 64);
-            } else {
-                $x1y1 = self::pointMultiply($privateKey);
-                $x = substr($x1y1, 0, 64);
-                $y = substr($x1y1, 64);
-            }
-
-            $userId = is_string($userId) ? $userId : '';
-            $z = Sm3::sm3(self::getUserIdHash($userId, $x, $y));
-            $dataHex = empty($data) ? '00' : $z . bin2hex($data);
-            $e = gmp_init($dataHex, 16);
-        } else {
-            $dataHex = empty($data) ? '00' : bin2hex($data);
-            $e = gmp_init($dataHex, 16);
-        }
+        $e = self::calcE($data, $hash, $publicKey ?: self::pointMultiply($privateKey), $userId);
 
         $n = gmp_init(self::$eccTable['n'], 16);
         $d = gmp_init($privateKey, 16);
-
-        $dPlus1 = gmp_add($d, gmp_init(1));
-        $dPlus1Inv = gmp_invert($dPlus1, $n);
+        $dPlus1Inv = gmp_invert(gmp_add($d, gmp_init(1)), $n);
 
         do {
             $k = gmp_random_range(gmp_init(1), gmp_sub($n, gmp_init(1)));
-
             $x1y1 = self::pointMultiply(gmp_strval($k, 16));
-            $x1 = substr($x1y1, 0, 64);
-            $y1 = substr($x1y1, 64);
-            $x1Dec = gmp_init($x1, 16);
+            $x1Dec = gmp_init(substr($x1y1, 0, 64), 16);
 
             if (gmp_cmp($x1Dec, $n) >= 0 || gmp_cmp($x1Dec, 0) === 0) {
                 continue;
             }
 
             $r = gmp_mod(gmp_add($e, $x1Dec), $n);
+            if (gmp_cmp($r, 0) === 0 || gmp_cmp(gmp_add($r, $k), $n) === 0) {
+                continue;
+            }
 
             $tmp = gmp_mod(gmp_sub($k, gmp_mul($r, $d)), $n);
             $s = gmp_mod(gmp_mul($dPlus1Inv, $tmp), $n);
         } while (gmp_cmp($s, 0) === 0);
 
-        $rHex = gmp_strval($r, 16);
-        $rHex = str_pad($rHex, 64, '0', STR_PAD_LEFT);
-        $sHex = gmp_strval($s, 16);
-        $sHex = str_pad($sHex, 64, '0', STR_PAD_LEFT);
+        $rHex = str_pad(gmp_strval($r, 16), 64, '0', STR_PAD_LEFT);
+        $sHex = str_pad(gmp_strval($s, 16), 64, '0', STR_PAD_LEFT);
 
-        if ($der) {
-            return self::createDerSignature($sHex, $rHex);
-        }
-
-        return $rHex . $sHex;
+        return $der ? self::createDerSignature($sHex, $rHex) : $rHex . $sHex;
     }
 
-    /**
-     * Creates a DER-encoded signature.
-     */
-    private static function createDerSignature(string $s, string $x1): string
-    {
-        $r = $x1;
-        $sHex = str_pad($s, 64, '0', STR_PAD_LEFT);
-
-        $rBytes = Hex::toBytes($r);
-        $sBytes = Hex::toBytes($sHex);
-
-        $rDer = self::derEncodeInteger($rBytes);
-        $sDer = self::derEncodeInteger($sBytes);
-
-        return bin2hex(chr(0x30) . chr(strlen($rDer . $sDer)) . $rDer . $sDer);
-    }
-
-    /**
-     * Encodes an integer as DER format.
-     */
-    private static function derEncodeInteger(array $bytes): string
-    {
-        $length = count($bytes);
-
-        while (count($bytes) > 1 && $bytes[0] === 0) {
-            array_shift($bytes);
-        }
-
-        if ($bytes[0] > 0x7f) {
-            array_unshift($bytes, 0);
-        }
-
-        $length = count($bytes);
-
-        if ($length < 128) {
-            $lengthBytes = chr($length);
-        } elseif ($length < 256) {
-            $lengthBytes = chr(0x81) . chr($length);
-        } else {
-            $lengthBytes = chr(0x82) . chr(($length >> 8) & 0xFF) . chr($length & 0xFF);
-        }
-
-        return chr(0x02) . $lengthBytes . implode('', array_map('chr', $bytes));
-    }
-
-    /**
-     * Verifies SM2 signature.
-     *
-     * @param string $data The signed data
-     * @param string $signature The signature to verify
-     * @param string $publicKey The public key in hexadecimal format (128 characters)
-     * @param SignatureOptions|null $options Signature options
-     * @return bool True if signature is valid, false otherwise
-     */
     public static function doVerifySignature(string $data, string $signature, string $publicKey, ?SignatureOptions $options = null): bool
     {
-        $options = $options ?? new SignatureOptions();
-
-        $der = $options->getDer();
+        $options ??= new SignatureOptions();
+        $der = $options->getDer() || strtolower(substr($signature, 0, 2)) === '30';
         $hash = $options->getHash();
         $userId = $options->getUserId();
 
-        $x = substr($publicKey, 0, 64);
-        $y = substr($publicKey, 64);
-
-        if ($der || strtolower(substr($signature, 0, 2)) === '30') {
-            $signatureHex = $signature;
-
-            $offset = 2;
-            $seqLen = hexdec(substr($signatureHex, $offset, 2));
-
-            $offset += 2;
-            if (substr($signatureHex, $offset, 2) !== '02') {
-                return false;
-            }
-            $offset += 2;
-            $rLen = hexdec(substr($signatureHex, $offset, 2));
-            $offset += 2;
-            $r = substr($signatureHex, $offset, $rLen * 2);
-            $offset += $rLen * 2;
-
-            if (strlen($r) > 64 && substr($r, 0, 2) === '00') {
-                $r = substr($r, 2);
-            }
-            if (strlen($r) % 2 !== 0) {
-                $r = '0' . $r;
-            }
-            $x1 = str_pad($r, 64, '0', STR_PAD_LEFT);
-
-            if (substr($signatureHex, $offset, 2) !== '02') {
-                return false;
-            }
-            $offset += 2;
-            $sLen = hexdec(substr($signatureHex, $offset, 2));
-            $offset += 2;
-            $s = substr($signatureHex, $offset, $sLen * 2);
-
-            if (strlen($s) > 64 && substr($s, 0, 2) === '00') {
-                $s = substr($s, 2);
-            }
-            if (strlen($s) % 2 !== 0) {
-                $s = '0' . $s;
-            }
-            $sHex = str_pad($s, 64, '0', STR_PAD_LEFT);
-        } else {
-            if (strlen($signature) !== 128) {
-                return false;
-            }
-            $x1 = substr($signature, 0, 64);
-            $sHex = substr($signature, 64);
-        }
-
-        $e = '';
-        if ($hash) {
-            $userId = is_string($userId) ? $userId : '';
-            $z = Sm3::sm3(self::getUserIdHash($userId, $x, $y));
-            $dataHex = empty($data) ? '00' : $z . bin2hex($data);
-            $e = gmp_init($dataHex, 16);
-        } else {
-            $dataHex = empty($data) ? '00' : bin2hex($data);
-            $e = gmp_init($dataHex, 16);
-        }
-
-        $n = gmp_init(self::$eccTable['n'], 16);
-        $x1Dec = gmp_init($x1, 16);
-        $sDec = gmp_init($sHex, 16);
-
-        if (gmp_cmp($x1Dec, $n) >= 0 || gmp_cmp($sDec, $n) >= 0) {
+        if (!self::isOnCurve($publicKey)) {
             return false;
         }
 
+        [$x1Hex, $sHex] = $der ? self::parseDerSignature($signature) : [substr($signature, 0, 64), substr($signature, 64)];
+        if ($x1Hex === null || $sHex === null) {
+            return false;
+        }
+
+        $n = gmp_init(self::$eccTable['n'], 16);
+        $x1Dec = gmp_init($x1Hex, 16);
+        $sDec = gmp_init($sHex, 16);
+        if (gmp_cmp($x1Dec, 0) <= 0 || gmp_cmp($x1Dec, $n) >= 0 || gmp_cmp($sDec, 0) <= 0 || gmp_cmp($sDec, $n) >= 0) {
+            return false;
+        }
+
+        $e = self::calcE($data, $hash, $publicKey, $userId);
         $t = gmp_mod(gmp_add($x1Dec, $sDec), $n);
         if (gmp_cmp($t, 0) === 0) {
             return false;
         }
 
         $point1 = self::pointMultiply('', gmp_strval($sDec, 16));
-        $point2 = self::pointMultiply($x . $y, gmp_strval($t, 16));
+        $point2 = self::pointMultiply($publicKey, gmp_strval($t, 16));
+        if ($point1 === null || $point2 === null) {
+            return false;
+        }
 
         $p = gmp_init(self::$eccTable['p'], 16);
         $a = gmp_init(self::$eccTable['a'], 16);
-
         $sum = self::pointAdd(
             gmp_init(substr($point1, 0, 64), 16),
             gmp_init(substr($point1, 64), 16),
@@ -375,22 +214,29 @@ class Sm2
             $p,
             $a
         );
+        if ($sum === null) {
+            return false;
+        }
 
-        $x2 = gmp_strval($sum['x'], 16);
-        $y2 = gmp_strval($sum['y'], 16);
-
-        $x2Hex = str_pad($x2, 64, '0', STR_PAD_LEFT);
-        $y2Hex = str_pad($y2, 64, '0', STR_PAD_LEFT);
-
-        $v = gmp_mod(gmp_add($e, gmp_init($x2, 16)), $n);
-        $r = gmp_mod(gmp_init($x1, 16), $n);
-
-        return gmp_strval($v, 16) === gmp_strval($r, 16);
+        $x2Hex = str_pad(gmp_strval($sum['x'], 16), 64, '0', STR_PAD_LEFT);
+        $v = gmp_mod(gmp_add($e, gmp_init($x2Hex, 16)), $n);
+        return gmp_strval($v, 16) === gmp_strval($x1Dec, 16);
     }
 
-    /**
-     * Calculates the hash of user ID for SM2 signature.
-     */
+    private static function calcE(string $data, bool $hash, string $publicKey, string $userId): \GMP
+    {
+        if ($hash) {
+            $x = substr($publicKey, 0, 64);
+            $y = substr($publicKey, 64);
+            $userId = is_string($userId) ? $userId : '';
+            $z = Sm3::sm3(self::getUserIdHash($userId, $x, $y));
+            $dataHex = empty($data) ? '00' : $z . bin2hex($data);
+            return gmp_init($dataHex, 16);
+        }
+        $dataHex = empty($data) ? '00' : bin2hex($data);
+        return gmp_init($dataHex, 16);
+    }
+
     private static function getUserIdHash(string $userId, string $x, string $y): string
     {
         $len = strlen($userId) * 8;
@@ -404,35 +250,24 @@ class Sm2
         return $userIdHex . self::intToHex($len) . $a . $b . $gX . $gY . $x . $y;
     }
 
-    /**
-     * Converts an integer to hexadecimal string.
-     */
     private static function intToHex(int $n): string
     {
         return str_pad(dechex($n), 8, '0', STR_PAD_LEFT);
     }
 
-    /**
-     * Key Derivation Function (KDF) for SM2 encryption.
-     */
     private static function kdf(string $seed, int $keyLen): string
     {
         $ct = 1;
         $key = '';
-
         while (strlen($key) < $keyLen) {
             $hash = Sm3::sm3(Hex::fromHex($seed . self::intToHex($ct)));
             $key .= Hex::fromHex($hash);
             $ct++;
         }
-
         return substr($key, 0, $keyLen);
     }
 
-    /**
-     * Performs point multiplication on the elliptic curve.
-     */
-    private static function pointMultiply(string $point, ?string $factor = null): string
+    private static function pointMultiply(string $point, ?string $factor = null): ?string
     {
         $p = gmp_init(self::$eccTable['p'], 16);
         $a = gmp_init(self::$eccTable['a'], 16);
@@ -446,53 +281,45 @@ class Sm2
         } else {
             $pointX = $Gx;
             $pointY = $Gy;
-            if ($factor === null) {
-                $factor = $point;
-            }
+            $factor ??= $point;
         }
 
-        if ($factor === null) {
-            $factor = bin2hex(random_bytes(32));
-        }
-
+        $factor ??= bin2hex(random_bytes(32));
         $factorDec = gmp_init($factor, 16);
         $factorBin = gmp_strval($factorDec, 2);
 
         $resultX = null;
         $resultY = null;
-
         $currentX = $pointX;
         $currentY = $pointY;
 
-        $len = strlen($factorBin);
-        for ($i = $len - 1; $i >= 0; $i--) {
+        for ($i = strlen($factorBin) - 1; $i >= 0; $i--) {
             if ($factorBin[$i] === '1') {
                 if ($resultX === null) {
                     $resultX = $currentX;
                     $resultY = $currentY;
                 } else {
                     $temp = self::pointAdd($resultX, $resultY, $currentX, $currentY, $p, $a);
+                    if ($temp === null) {
+                        return null;
+                    }
                     $resultX = $temp['x'];
                     $resultY = $temp['y'];
                 }
             }
-
             $temp = self::pointDouble($currentX, $currentY, $p, $a);
             $currentX = $temp['x'];
             $currentY = $temp['y'];
         }
 
         if ($resultX === null) {
-            return str_pad('', 64, '0') . str_pad('', 64, '0');
+            return str_repeat('0', 128);
         }
 
         return str_pad(gmp_strval($resultX, 16), 64, '0', STR_PAD_LEFT) .
             str_pad(gmp_strval($resultY, 16), 64, '0', STR_PAD_LEFT);
     }
 
-    /**
-     * Adds two points on the elliptic curve.
-     */
     private static function pointAdd(\GMP $x1, \GMP $y1, \GMP $x2, \GMP $y2, \GMP $p, \GMP $a): ?array
     {
         if (gmp_cmp($x1, $x2) === 0) {
@@ -502,37 +329,118 @@ class Sm2
             return null;
         }
 
-        $t1 = gmp_mod(gmp_sub($y2, $y1), $p);
-        $t2 = gmp_mod(gmp_sub($x2, $x1), $p);
-
-        $lambda = gmp_mod(gmp_mul($t1, gmp_invert($t2, $p)), $p);
-
+        $lambda = gmp_mod(gmp_mul(gmp_sub($y2, $y1), gmp_invert(gmp_sub($x2, $x1), $p)), $p);
         $x3 = gmp_mod(gmp_sub(gmp_sub(gmp_pow($lambda, 2), $x1), $x2), $p);
-
         $y3 = gmp_mod(gmp_sub(gmp_mul($lambda, gmp_sub($x1, $x3)), $y1), $p);
 
-        return [
-            'x' => $x3,
-            'y' => $y3,
-        ];
+        return ['x' => $x3, 'y' => $y3];
     }
 
-    /**
-     * Doubles a point on the elliptic curve.
-     */
     private static function pointDouble(\GMP $x, \GMP $y, \GMP $p, \GMP $a): array
     {
-        $x2 = gmp_mod(gmp_pow($x, 2), $p);
-        $threeX2 = gmp_mod(gmp_mul(gmp_init(3), $x2), $p);
-        $lambda = gmp_mod(gmp_mul(gmp_add($threeX2, $a), gmp_invert(gmp_mul(gmp_init(2), $y), $p)), $p);
-
+        $lambda = gmp_mod(
+            gmp_mul(
+                gmp_add(gmp_mul(gmp_init(3), gmp_pow($x, 2)), $a),
+                gmp_invert(gmp_mul(gmp_init(2), $y), $p)
+            ),
+            $p
+        );
         $x3 = gmp_mod(gmp_sub(gmp_pow($lambda, 2), gmp_mul(gmp_init(2), $x)), $p);
-
         $y3 = gmp_mod(gmp_sub(gmp_mul($lambda, gmp_sub($x, $x3)), $y), $p);
+        return ['x' => $x3, 'y' => $y3];
+    }
 
+    private static function createDerSignature(string $sHex, string $rHex): string
+    {
+        $rDer = self::derEncodeInteger(Hex::toBytes($rHex));
+        $sDer = self::derEncodeInteger(Hex::toBytes($sHex));
+        $seq = $rDer . $sDer;
+        return bin2hex(chr(0x30) . chr(strlen($seq)) . $seq);
+    }
+
+    private static function derEncodeInteger(array $bytes): string
+    {
+        while (count($bytes) > 1 && $bytes[0] === 0) {
+            array_shift($bytes);
+        }
+        if ($bytes[0] > 0x7f) {
+            array_unshift($bytes, 0);
+        }
+        $len = count($bytes);
+        $lenBytes = $len < 128 ? chr($len) : chr(0x81) . chr($len);
+        return chr(0x02) . $lenBytes . implode('', array_map('chr', $bytes));
+    }
+
+    private static function parseDerSignature(string $sig): array
+    {
+        if (strlen($sig) < 8 || substr($sig, 0, 2) !== '30') {
+            return [null, null];
+        }
+        $offset = 2;
+        $seqLen = hexdec(substr($sig, $offset, 2));
+        $offset += 2;
+        if (substr($sig, $offset, 2) !== '02') {
+            return [null, null];
+        }
+        $offset += 2;
+        $rLen = hexdec(substr($sig, $offset, 2));
+        $offset += 2;
+        $r = substr($sig, $offset, $rLen * 2);
+        $offset += $rLen * 2;
+        if (substr($sig, $offset, 2) !== '02') {
+            return [null, null];
+        }
+        $offset += 2;
+        $sLen = hexdec(substr($sig, $offset, 2));
+        $offset += 2;
+        $s = substr($sig, $offset, $sLen * 2);
+
+        $r = ltrim($r, '0');
+        $s = ltrim($s, '0');
+        $r = $r === '' ? '0' : $r;
+        $s = $s === '' ? '0' : $s;
+        if (strlen($r) % 2 === 1) {
+            $r = '0' . $r;
+        }
+        if (strlen($s) % 2 === 1) {
+            $s = '0' . $s;
+        }
+        return [str_pad($r, 64, '0', STR_PAD_LEFT), str_pad($s, 64, '0', STR_PAD_LEFT)];
+    }
+
+    private static function isAllZero(string $data): bool
+    {
+        return trim($data, "\0") === '';
+    }
+
+    private static function isOnCurve(string $publicKey): bool
+    {
+        if (strlen($publicKey) !== 128) {
+            return false;
+        }
+        $p = gmp_init(self::$eccTable['p'], 16);
+        $a = gmp_init(self::$eccTable['a'], 16);
+        $b = gmp_init(self::$eccTable['b'], 16);
+        $x = gmp_init(substr($publicKey, 0, 64), 16);
+        $y = gmp_init(substr($publicKey, 64), 16);
+
+        if (gmp_cmp($x, 0) < 0 || gmp_cmp($x, $p) >= 0 || gmp_cmp($y, 0) < 0 || gmp_cmp($y, $p) >= 0) {
+            return false;
+        }
+
+        $left = gmp_mod(gmp_pow($y, 2), $p);
+        $right = gmp_mod(gmp_add(gmp_add(gmp_pow($x, 3), gmp_mul($a, $x)), $b), $p);
+        return gmp_cmp($left, $right) === 0;
+    }
+
+    private static function parsePoint(string $hex): ?array
+    {
+        if (strlen($hex) !== 128) {
+            return null;
+        }
         return [
-            'x' => $x3,
-            'y' => $y3,
+            'x' => gmp_init(substr($hex, 0, 64), 16),
+            'y' => gmp_init(substr($hex, 64), 16),
         ];
     }
 }

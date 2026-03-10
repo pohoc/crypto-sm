@@ -2,7 +2,6 @@
 
 [![PHP Version](https://img.shields.io/badge/PHP-8.0+-blue.svg)](https://www.php.net/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![CI](https://github.com/pohoc/crypto-sm/actions/workflows/php.yml/badge.svg)](https://github.com/pohoc/crypto-sm/actions)
 
 国密算法 SM2、SM3、SM4 的 PHP 实现。
 
@@ -115,15 +114,15 @@ $hash = Sm3::sm3('Hello World');
 use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
 
-$key = '0123456789abcdef'; // 16 字节密钥
+$key = '0123456789abcdeffedcba9876543210'; // 32 位十六进制，128 bit
 $data = 'Hello World';
 
-// ECB 模式（默认）
+// ECB 模式（默认），返回十六进制密文
 $ciphertext = Sm4::encrypt($data, $key);
 $plaintext = Sm4::decrypt($ciphertext, $key);
 
-// CBC 模式
-$options = (new Sm4Options())->setMode('cbc')->setIv('0123456789abcdef');
+// CBC 模式，IV 同样为 32 位十六进制
+$options = (new Sm4Options())->setMode('cbc')->setIv('000102030405060708090a0b0c0d0e0f');
 $ciphertext = Sm4::encrypt($data, $key, $options);
 $plaintext = Sm4::decrypt($ciphertext, $key, $options);
 ```
