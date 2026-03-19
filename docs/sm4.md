@@ -11,7 +11,7 @@ SM4 是中国分组密码算法标准 (GM/T 0002-2012)，是一种 128 位分组
 ```php
 use CryptoSm\SM4\Sm4;
 
-$key = '0123456789abcdef'; // 16 字节
+$key = '0123456789abcdeffedcba9876543210'; // 32 十六进制字符，128 bit
 $data = 'Hello World';
 
 $ciphertext = Sm4::encrypt($data, $key);
@@ -28,7 +28,7 @@ $plaintext = Sm4::decrypt($ciphertext, $key);
 use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
 
-$key = '0123456789abcdef';
+$key = '0123456789abcdeffedcba9876543210';
 $options = (new Sm4Options())->setMode('ecb');
 
 $ciphertext = Sm4::encrypt($data, $key, $options);
@@ -43,8 +43,8 @@ $plaintext = Sm4::decrypt($ciphertext, $key, $options);
 use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
 
-$key = '0123456789abcdef';
-$iv = '0123456789abcdef'; // 16 字节 IV
+$key = '0123456789abcdeffedcba9876543210';
+$iv = 'fedcba9876543210fedcba9876543210'; // 32 十六进制字符 IV
 $options = (new Sm4Options())
     ->setMode('cbc')
     ->setIv($iv);
@@ -61,7 +61,7 @@ $plaintext = Sm4::decrypt($ciphertext, $key, $options);
 use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
 
-$key = '0123456789abcdef';
+$key = '0123456789abcdeffedcba9876543210';
 $options = (new Sm4Options())->setPadding('pkcs5');
 
 $ciphertext = Sm4::encrypt($data, $key, $options);
@@ -74,7 +74,7 @@ $plaintext = Sm4::decrypt($ciphertext, $key, $options);
 use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
 
-$key = '0123456789abcdef';
+$key = '0123456789abcdeffedcba9876543210';
 $data = str_pad('', 16, 'x'); // 必须是 16 的倍数
 $options = (new Sm4Options())->setPadding('none');
 
@@ -95,7 +95,7 @@ require_once 'vendor/autoload.php';
 
 use CryptoSm\SM4\Sm4;
 
-$key = '0123456789abcdef';
+$key = '0123456789abcdeffedcba9876543210';
 $plaintext = 'Hello World';
 
 $ciphertext = Sm4::encrypt($plaintext, $key);
@@ -117,8 +117,8 @@ require_once 'vendor/autoload.php';
 use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
 
-$key = '0123456789abcdef';
-$iv = 'fedcba9876543210';
+$key = '0123456789abcdeffedcba9876543210';
+$iv = 'fedcba9876543210fedcba9876543210';
 $plaintext = 'Hello World';
 
 $options = (new Sm4Options())
@@ -144,10 +144,10 @@ require_once 'vendor/autoload.php';
 use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
 
-$key = '0123456789abcdef';
+$key = '0123456789abcdeffedcba9876543210';
 $plaintext = str_repeat('A', 1000); // 长数据
 
-$options = (new Sm4Options())->setMode('cbc')->setIv('0123456789abcdef');
+$options = (new Sm4Options())->setMode('cbc')->setIv('fedcba9876543210fedcba9876543210');
 $ciphertext = Sm4::encrypt($plaintext, $key, $options);
 $decrypted = Sm4::decrypt($ciphertext, $key, $options);
 
@@ -160,10 +160,10 @@ echo "匹配: " . ($plaintext === $decrypted ? '是' : '否') . "\n";
 
 | 模式 | 密钥长度 | IV 长度 |
 |------|----------|---------|
-| ECB | 16 字节 | 无 |
-| CBC | 16 字节 | 16 字节 |
-| CFB | 16 字节 | 16 字节 |
-| OFB | 16 字节 | 16 字节 |
+| ECB | 32 十六进制字符 | 无 |
+| CBC | 32 十六进制字符 | 32 十六进制字符 |
+| CFB | 32 十六进制字符 | 32 十六进制字符 |
+| OFB | 32 十六进制字符 | 32 十六进制字符 |
 
 ## 技术细节
 
