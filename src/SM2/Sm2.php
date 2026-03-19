@@ -4,13 +4,13 @@ declare(strict_types=1);
 
 namespace CryptoSm\SM2;
 
+use CryptoSm\Exception\CryptoException;
+use CryptoSm\Exception\InvalidKeyException;
+use CryptoSm\Interface\SignerInterface;
 use CryptoSm\SM3\Sm3;
 use CryptoSm\Utils\Hex;
 
-/**
- * SM2 椭圆曲线密码 (GM/T 0003-2012)
- */
-class Sm2
+class Sm2 implements SignerInterface
 {
     public const CIPHER_MODE_1 = 1; // C1C3C2
     public const CIPHER_MODE_0 = 0; // C1C2C3
@@ -49,7 +49,7 @@ class Sm2
         $cipherMode = $options->getCipherMode();
 
         if (!self::isOnCurve($publicKey)) {
-            throw new \InvalidArgumentException('Invalid public key');
+            throw new InvalidKeyException('Invalid public key');
         }
 
         do {
@@ -87,7 +87,7 @@ class Sm2
         $cipherMode = $options->getCipherMode();
 
         if (strlen($data) < 192 || strlen($data) % 2 !== 0) {
-            throw new \InvalidArgumentException('Invalid ciphertext');
+            throw new InvalidKeyException('Invalid ciphertext');
         }
 
         $C1 = substr($data, 0, 128);
@@ -103,7 +103,7 @@ class Sm2
         $a = gmp_init(self::$eccTable['a'], 16);
         $C1Point = self::parsePoint($C1);
         if ($C1Point === null || !self::isOnCurve($C1)) {
-            throw new \InvalidArgumentException('Invalid C1');
+            throw new InvalidKeyException('Invalid C1');
         }
 
         $x2y2 = self::pointMultiply($C1, $privateKey);
@@ -113,7 +113,7 @@ class Sm2
         $dataLen = strlen($C2) / 2;
         $t = self::kdf($x2 . $y2, $dataLen);
         if (self::isAllZero($t)) {
-            throw new \Exception('KDF derived all-zero key');
+            throw new CryptoException('KDF derived all-zero key');
         }
 
         $M = '';
@@ -124,10 +124,30 @@ class Sm2
 
         $u = Sm3::sm3(Hex::fromHex($x2) . $M . Hex::fromHex($y2));
         if ($u !== $C3) {
-            throw new \Exception('Verification failed');
+            throw new CryptoException('SM2 signature verification failed');
         }
 
         return $M;
+    }
+
+    public static function encrypt(string $data, string $publicKey, mixed $options = null): string
+    {
+        return self::doEncrypt($data, $publicKey, $options);
+    }
+
+    public static function decrypt(string $data, string $privateKey, mixed $options = null): string
+    {
+        return self::doDecrypt($data, $privateKey, $options);
+    }
+
+    public static function sign(string $data, string $privateKey, mixed $options = null): string
+    {
+        return self::doSignature($data, $privateKey, $options);
+    }
+
+    public static function verify(string $data, string $signature, string $publicKey, mixed $options = null): bool
+    {
+        return self::doVerifySignature($data, $signature, $publicKey, $options);
     }
 
     public static function doSignature(string $data, string $privateKey, ?SignatureOptions $options = null): string

@@ -4,22 +4,30 @@ declare(strict_types=1);
 
 namespace CryptoSm\SM3;
 
-/**
- * SM3 摘要算法 (GM/T 0004-2012)
- */
 class Sm3
 {
     private const IV = [
-        0x7380166f, 0x4914b2b9, 0x172442d7, 0xda8a0600,
-        0xa96f30bc, 0x163138aa, 0xe38dee4d, 0xb0fb0e4e,
+        0x7380166f,
+        0x4914b2b9,
+        0x172442d7,
+        0xda8a0600,
+        0xa96f30bc,
+        0x163138aa,
+        0xe38dee4d,
+        0xb0fb0e4e,
     ];
 
     public static function sm3(string $data): string
     {
-        return self::hash($data);
+        return self::computeHash($data);
     }
 
-    private static function hash(string $msg): string
+    public static function hash(string $data): string
+    {
+        return self::sm3($data);
+    }
+
+    private static function computeHash(string $msg): string
     {
         $blocks = self::pad($msg);
         $v = self::IV;
@@ -49,8 +57,14 @@ class Sm3
             }
 
             $v = [
-                self::p32($v[0] ^ $a), self::p32($v[1] ^ $b), self::p32($v[2] ^ $c), self::p32($v[3] ^ $d),
-                self::p32($v[4] ^ $e), self::p32($v[5] ^ $f), self::p32($v[6] ^ $g), self::p32($v[7] ^ $h),
+                self::p32($v[0] ^ $a),
+                self::p32($v[1] ^ $b),
+                self::p32($v[2] ^ $c),
+                self::p32($v[3] ^ $d),
+                self::p32($v[4] ^ $e),
+                self::p32($v[5] ^ $f),
+                self::p32($v[6] ^ $g),
+                self::p32($v[7] ^ $h),
             ];
         }
 

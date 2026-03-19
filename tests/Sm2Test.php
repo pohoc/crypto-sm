@@ -74,13 +74,13 @@ class Sm2Test extends TestCase
 
     public function testInvalidPublicKeyRejected()
     {
-        $this->expectException(\InvalidArgumentException::class);
+        $this->expectException(\CryptoSm\Exception\InvalidKeyException::class);
         Sm2::doEncrypt('msg', str_repeat('a', 128));
     }
 
     public function testInvalidCiphertextRejected()
     {
-        $this->expectException(\InvalidArgumentException::class);
+        $this->expectException(\CryptoSm\Exception\InvalidKeyException::class);
         $kp = Sm2::generateKeyPairHex();
         Sm2::doDecrypt(str_repeat('a', 190), $kp->getPrivateKey());
     }
