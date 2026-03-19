@@ -27,9 +27,13 @@ jobs:
 
       - name: Generate changelog
         id: changelog
-        uses: metcalfc/changelog-generator@v4
-        with:
-          myToken: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          git log --no-merges --oneline --pretty="* %s (%h)" $(git describe --tags --abbrev=0 2>/dev/null || echo "${VERSION}~1")..HEAD > changelog.txt
+          if [ ! -s changelog.txt ]; then
+            echo "* Initial release" > changelog.txt
+          fi
+          echo "CHANGELOG=$(cat changelog.txt)" >> $GITHUB_OUTPUT
 
       - name: Create Release
         uses: actions/create-release@v1
@@ -38,6 +42,6 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.VERSION }}
           release_name: Release ${{ steps.version.outputs.VERSION }}
-          body: ${{ steps.changelog.outputs.changelog }}
+          body: ${{ steps.changelog.outputs.CHANGELOG }}
           draft: false
           prerelease: false
