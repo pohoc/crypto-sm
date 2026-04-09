@@ -86,9 +86,16 @@ class Sm3Test extends TestCase
 
     public function testSm3KnownTestVector()
     {
+        // GM/T 0004-2012 标准测试向量: SM3("abc")
         $result = Sm3::sm3('abc');
-        $this->assertEquals(64, strlen($result));
-        $this->assertTrue(ctype_xdigit($result));
+        $this->assertEquals('66c7f0f462eeedd9d1f2d46bdc10e4e24167c4875cf2f7a2297da02b8f4ba8e0', $result);
+    }
+
+    public function testSm3EmptyStringTestVector()
+    {
+        // SM3("") 标准测试向量
+        $result = Sm3::sm3('');
+        $this->assertEquals('1ab21d8355cfa17f8e61194831e81a8f22bec8c728fefb747ed035eb5082aa2b', $result);
     }
 
     public function testSm3MultipleCallsSameResult()
@@ -146,5 +153,12 @@ class Sm3Test extends TestCase
             $hash2 = Sm3::sm3($msg);
             $this->assertEquals($hash1, $hash2, "Hash not reproducible for: $msg");
         }
+    }
+
+    public function testSm3ImplementsHashInterface()
+    {
+        $sm3 = new Sm3();
+        $this->assertInstanceOf(\CryptoSm\Interface\HashInterface::class, $sm3);
+        $this->assertEquals(Sm3::sm3('test'), $sm3->hash('test'));
     }
 }

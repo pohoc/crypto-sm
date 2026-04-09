@@ -6,23 +6,29 @@ SM4 是中国分组密码算法标准 (GM/T 0002-2012)，是一种 128 位分组
 
 ## 基本用法
 
-### ECB 模式（默认）
+### ECB 模式（默认 → 已改为 CBC）
+
+> **注意**: 从当前版本起，默认加密模式已从 ECB 改为 CBC。ECB 模式不安全，仅建议在兼容旧系统时使用。
 
 ```php
 use CryptoSm\SM4\Sm4;
+use CryptoSm\SM4\Sm4Options;
 
-$key = '0123456789abcdeffedcba9876543210'; // 32 十六进制字符，128 bit
-$data = 'Hello World';
+$key = '0123456789abcdeffedcba9876543210';
+$iv = 'fedcba9876543210fedcba9876543210';
+$options = (new Sm4Options())
+    ->setMode('cbc')
+    ->setIv($iv);
 
-$ciphertext = Sm4::encrypt($data, $key);
-$plaintext = Sm4::decrypt($ciphertext, $key);
+$ciphertext = Sm4::encrypt($data, $key, $options);
+$plaintext = Sm4::decrypt($ciphertext, $key, $options);
 ```
 
 ## 密码模式
 
-### ECB 模式
+### ECB 模式（不推荐）
 
-电子密码本模式 - 每个分组独立加密。
+电子密码本模式 - 每个分组独立加密。**注意：ECB 模式不安全，相同明文会产生相同密文，仅建议在兼容旧系统时使用。**
 
 ```php
 use CryptoSm\SM4\Sm4;
@@ -158,12 +164,12 @@ echo "匹配: " . ($plaintext === $decrypted ? '是' : '否') . "\n";
 
 ## 密钥和 IV 要求
 
-| 模式 | 密钥长度 | IV 长度 |
-|------|----------|---------|
-| ECB | 32 十六进制字符 | 无 |
-| CBC | 32 十六进制字符 | 32 十六进制字符 |
-| CFB | 32 十六进制字符 | 32 十六进制字符 |
-| OFB | 32 十六进制字符 | 32 十六进制字符 |
+| 模式 | 密钥长度 | IV 长度 | 状态 |
+|------|----------|---------|------|
+| CBC（推荐） | 32 十六进制字符 | 32 十六进制字符 | 已实现 |
+| ECB（不推荐） | 32 十六进制字符 | 无 | 已实现 |
+| CFB | 32 十六进制字符 | 32 十六进制字符 | 计划中 |
+| OFB | 32 十六进制字符 | 32 十六进制字符 | 计划中 |
 
 ## 技术细节
 
@@ -174,7 +180,7 @@ echo "匹配: " . ($plaintext === $decrypted ? '是' : '否') . "\n";
 
 ## 安全注意事项
 
-1. 对于安全关键的应用，请始终使用 CBC 模式或其他认证模式
+1. **推荐使用 CBC 模式**（当前默认），ECB 模式不安全，相同明文会产生相同密文
 2. 在 CBC 模式下，每次加密操作都应使用随机的 IV
 3. 安全存储密钥（使用环境变量或安全的密钥管理）
 4. SM4 在中国是政府强制使用的，但已经公开发布

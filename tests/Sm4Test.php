@@ -5,15 +5,19 @@ namespace CryptoSm\Tests;
 use PHPUnit\Framework\TestCase;
 use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
+use CryptoSm\Exception\InvalidKeyException;
 
 class Sm4Test extends TestCase
 {
+    private string $key = '0123456789abcdeffedcba9876543210';
+    private string $iv = 'fedcba98765432100123456789abcdef';
+
     public function testSm4EncryptReturnsHex()
     {
         $msg = 'hello world! test';
-        $key = '0123456789abcdeffedcba9876543210';
+        $options = (new Sm4Options())->setMode('ecb');
 
-        $encrypted = Sm4::encrypt($msg, $key);
+        $encrypted = Sm4::encrypt($msg, $this->key, $options);
         $this->assertNotEmpty($encrypted);
         $this->assertTrue(ctype_xdigit($encrypted));
     }
@@ -21,17 +25,17 @@ class Sm4Test extends TestCase
     public function testSm4DecryptReturnsString()
     {
         $msg = 'hello world! test message12345';
-        $key = '0123456789abcdeffedcba9876543210';
+        $options = (new Sm4Options())->setMode('ecb');
 
-        $encrypted = Sm4::encrypt($msg, $key);
-        $decrypted = Sm4::decrypt($encrypted, $key);
+        $encrypted = Sm4::encrypt($msg, $this->key, $options);
+        $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
 
         $this->assertIsString($decrypted);
     }
 
     public function testSm4KeyValidation()
     {
-        $this->expectException(\CryptoSm\Exception\InvalidKeyException::class);
+        $this->expectException(InvalidKeyException::class);
 
         $msg = 'test';
         $key = '0123456789abcdeffedcba987654321';
@@ -39,59 +43,62 @@ class Sm4Test extends TestCase
         Sm4::encrypt($msg, $key);
     }
 
-    public function testSm4KeyLength()
-    {
-        $key = '0123456789abcdeffedcba9876543210';
-        $this->assertEquals(32, strlen($key));
-    }
-
     public function testSm4NoPadding()
     {
         $msg = '1234567890123456';
-        $key = '0123456789abcdeffedcba9876543210';
+        $options = (new Sm4Options())->setMode('ecb')->setPadding('none');
 
-        $options = (new Sm4Options())->setPadding('none');
-
-        $encrypted = Sm4::encrypt($msg, $key, $options);
+        $encrypted = Sm4::encrypt($msg, $this->key, $options);
         $this->assertEquals(32, strlen($encrypted));
 
-        $decrypted = Sm4::decrypt($encrypted, $key, $options);
+        $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
         $this->assertEquals($msg, $decrypted);
     }
 
     public function testSm4CbcMode()
     {
         $msg = 'hello world test';
-        $key = '0123456789abcdeffedcba9876543210';
-        $iv = 'fedcba98765432100123456789abcdef';
+        $options = (new Sm4Options())->setMode('cbc')->setIv($this->iv);
 
-        $options = (new Sm4Options())->setMode('cbc')->setIv($iv);
-
-        $encrypted = Sm4::encrypt($msg, $key, $options);
+        $encrypted = Sm4::encrypt($msg, $this->key, $options);
         $this->assertNotEmpty($encrypted);
 
-        $decrypted = Sm4::decrypt($encrypted, $key, $options);
+        $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
         $this->assertEquals($msg, $decrypted);
     }
 
-    public function testSm4Consistency()
+    public function testSm4CbcDefaultMode()
     {
-        $msg = 'consistent test';
-        $key = '0123456789abcdeffedcba9876543210';
+        // CBC is now the default mode - requires IV
+        $msg = 'hello world test';
+        $options = (new Sm4Options())->setIv($this->iv);
 
-        $encrypted1 = Sm4::encrypt($msg, $key);
-        $encrypted2 = Sm4::encrypt($msg, $key);
+        $encrypted = Sm4::encrypt($msg, $this->key, $options);
+        $this->assertNotEmpty($encrypted);
 
-        $this->assertEquals($encrypted1, $encrypted2);
+        $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
+        $this->assertEquals($msg, $decrypted);
+    }
+
+    public function testSm4EcbMode()
+    {
+        $msg = 'hello world test';
+        $options = (new Sm4Options())->setMode('ecb');
+
+        $encrypted = Sm4::encrypt($msg, $this->key, $options);
+        $this->assertNotEmpty($encrypted);
+
+        $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
+        $this->assertEquals($msg, $decrypted);
     }
 
     public function testSm4EncryptDecrypt()
     {
         $msg = 'Hello, SM4!';
-        $key = '0123456789abcdeffedcba9876543210';
+        $options = (new Sm4Options())->setMode('ecb');
 
-        $encrypted = Sm4::encrypt($msg, $key);
-        $decrypted = Sm4::decrypt($encrypted, $key);
+        $encrypted = Sm4::encrypt($msg, $this->key, $options);
+        $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
 
         $this->assertEquals($msg, $decrypted);
     }
@@ -99,10 +106,10 @@ class Sm4Test extends TestCase
     public function testSm4EncryptDecryptChinese()
     {
         $msg = '你好，SM4！';
-        $key = '0123456789abcdeffedcba9876543210';
+        $options = (new Sm4Options())->setMode('ecb');
 
-        $encrypted = Sm4::encrypt($msg, $key);
-        $decrypted = Sm4::decrypt($encrypted, $key);
+        $encrypted = Sm4::encrypt($msg, $this->key, $options);
+        $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
 
         $this->assertEquals($msg, $decrypted);
     }
@@ -110,31 +117,28 @@ class Sm4Test extends TestCase
     public function testSm4EncryptDecryptLongMessage()
     {
         $msg = str_repeat('Long message test. ', 100);
-        $key = '0123456789abcdeffedcba9876543210';
+        $options = (new Sm4Options())->setMode('ecb');
 
-        $encrypted = Sm4::encrypt($msg, $key);
-        $decrypted = Sm4::decrypt($encrypted, $key);
+        $encrypted = Sm4::encrypt($msg, $this->key, $options);
+        $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
 
         $this->assertEquals($msg, $decrypted);
     }
 
     public function testSm4CbcModeRequiresIv()
     {
-        $this->expectException(\CryptoSm\Exception\InvalidKeyException::class);
+        $this->expectException(InvalidKeyException::class);
         $this->expectExceptionMessage('CBC mode requires IV');
 
         $msg = 'test message';
-        $key = '0123456789abcdeffedcba9876543210';
+        $options = (new Sm4Options())->setMode('cbc');
 
-        $options = new Sm4Options();
-        $options->setMode('cbc');
-
-        Sm4::encrypt($msg, $key, $options);
+        Sm4::encrypt($msg, $this->key, $options);
     }
 
     public function testSm4InvalidKeyLength()
     {
-        $this->expectException(\CryptoSm\Exception\InvalidKeyException::class);
+        $this->expectException(InvalidKeyException::class);
         $this->expectExceptionMessage('Key must be 128 bits (32 hex chars)');
 
         $msg = 'test message';
@@ -146,10 +150,10 @@ class Sm4Test extends TestCase
     public function testSm4EmptyMessage()
     {
         $msg = '';
-        $key = '0123456789abcdeffedcba9876543210';
+        $options = (new Sm4Options())->setMode('ecb');
 
-        $encrypted = Sm4::encrypt($msg, $key);
-        $decrypted = Sm4::decrypt($encrypted, $key);
+        $encrypted = Sm4::encrypt($msg, $this->key, $options);
+        $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
 
         $this->assertEquals($msg, $decrypted);
     }
@@ -157,11 +161,11 @@ class Sm4Test extends TestCase
     public function testSm4DifferentKeysProduceDifferentResults()
     {
         $msg = 'test message';
-        $key1 = '0123456789abcdeffedcba9876543210';
         $key2 = 'fedcba98765432100123456789abcdef';
+        $options = (new Sm4Options())->setMode('ecb');
 
-        $encrypted1 = Sm4::encrypt($msg, $key1);
-        $encrypted2 = Sm4::encrypt($msg, $key2);
+        $encrypted1 = Sm4::encrypt($msg, $this->key, $options);
+        $encrypted2 = Sm4::encrypt($msg, $key2, $options);
 
         $this->assertNotEquals($encrypted1, $encrypted2);
     }
@@ -187,18 +191,8 @@ class Sm4Test extends TestCase
         $this->assertEquals(8, count($bytes));
     }
 
-    public function testSm4Utf8ToArray()
-    {
-        $str = 'hello';
-        $array = Sm4::utf8ToArray($str);
-
-        $this->assertIsArray($array);
-        $this->assertEquals(5, count($array));
-    }
-
     public function testSm4MultipleEncryptDecrypt()
     {
-        $key = '0123456789abcdeffedcba9876543210';
         $messages = [
             'short',
             'medium length message',
@@ -206,10 +200,11 @@ class Sm4Test extends TestCase
             str_repeat('x', 100),
             '中文测试消息'
         ];
+        $options = (new Sm4Options())->setMode('ecb');
 
         foreach ($messages as $msg) {
-            $encrypted = Sm4::encrypt($msg, $key);
-            $decrypted = Sm4::decrypt($encrypted, $key);
+            $encrypted = Sm4::encrypt($msg, $this->key, $options);
+            $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
             $this->assertEquals($msg, $decrypted, "Failed for message: $msg");
         }
     }
@@ -217,32 +212,50 @@ class Sm4Test extends TestCase
     public function testSm4CbcModeDifferentIvProduceDifferentResults()
     {
         $msg = 'test message';
-        $key = '0123456789abcdeffedcba9876543210';
-        $iv1 = 'fedcba98765432100123456789abcdef';
         $iv2 = '0123456789abcdeffedcba9876543210';
 
-        $options1 = new Sm4Options();
-        $options1->setMode('cbc')->setIv($iv1);
+        $options1 = (new Sm4Options())->setMode('cbc')->setIv($this->iv);
+        $options2 = (new Sm4Options())->setMode('cbc')->setIv($iv2);
 
-        $options2 = new Sm4Options();
-        $options2->setMode('cbc')->setIv($iv2);
-
-        $encrypted1 = Sm4::encrypt($msg, $key, $options1);
-        $encrypted2 = Sm4::encrypt($msg, $key, $options2);
+        $encrypted1 = Sm4::encrypt($msg, $this->key, $options1);
+        $encrypted2 = Sm4::encrypt($msg, $this->key, $options2);
 
         $this->assertNotEquals($encrypted1, $encrypted2);
     }
 
     public function testSm4Pkcs5Padding()
     {
-        $key = '0123456789abcdeffedcba9876543210';
+        $options = (new Sm4Options())->setMode('ecb');
 
         $msg1 = '1';
-        $encrypted1 = Sm4::encrypt($msg1, $key);
+        $encrypted1 = Sm4::encrypt($msg1, $this->key, $options);
         $this->assertEquals(32, strlen($encrypted1));
 
         $msg16 = '1234567890123456';
-        $encrypted16 = Sm4::encrypt($msg16, $key);
+        $encrypted16 = Sm4::encrypt($msg16, $this->key, $options);
         $this->assertEquals(64, strlen($encrypted16));
+    }
+
+    public function testSm4ImplementsCipherInterface()
+    {
+        $this->assertInstanceOf(\CryptoSm\Interface\CipherInterface::class, new Sm4());
+    }
+
+    public function testSm4OptionsInvalidMode()
+    {
+        $this->expectException(InvalidKeyException::class);
+        (new Sm4Options())->setMode('cfb');
+    }
+
+    public function testSm4OptionsInvalidPadding()
+    {
+        $this->expectException(InvalidKeyException::class);
+        (new Sm4Options())->setPadding('invalid');
+    }
+
+    public function testSm4InvalidCiphertextHex()
+    {
+        $this->expectException(InvalidKeyException::class);
+        Sm4::decrypt('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', $this->key, (new Sm4Options())->setMode('ecb'));
     }
 }

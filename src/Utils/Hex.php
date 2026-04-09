@@ -15,30 +15,21 @@ class Hex
         if (strlen($hex) % 2 !== 0) {
             $hex = '0' . $hex;
         }
-        $bytes = [];
-        for ($i = 0; $i < strlen($hex); $i += 2) {
-            $byte = hexdec(substr($hex, $i, 2));
-            $bytes[] = $byte;
+        $binary = hex2bin($hex);
+        if ($binary === false) {
+            return [];
         }
-        return $bytes;
+        return array_values(unpack('C*', $binary));
     }
 
     public static function toHex(array $bytes): string
     {
-        $hex = '';
-        foreach ($bytes as $byte) {
-            $hex .= str_pad(dechex($byte & 0xff), 2, '0', STR_PAD_LEFT);
-        }
-        return $hex;
+        return bin2hex(implode('', array_map('chr', $bytes)));
     }
 
     public static function toHexString(string $str): string
     {
-        $hex = '';
-        for ($i = 0; $i < strlen($str); $i++) {
-            $hex .= str_pad(dechex(ord($str[$i])), 2, '0', STR_PAD_LEFT);
-        }
-        return $hex;
+        return bin2hex($str);
     }
 
     public static function fromHex(string $hex): string
@@ -47,10 +38,7 @@ class Hex
         if (strlen($hex) % 2 !== 0) {
             $hex = '0' . $hex;
         }
-        $str = '';
-        for ($i = 0; $i < strlen($hex); $i += 2) {
-            $str .= chr(hexdec(substr($hex, $i, 2)));
-        }
-        return $str;
+        $result = hex2bin($hex);
+        return $result === false ? '' : $result;
     }
 }

@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace CryptoSm\SM3;
 
-class Sm3
+use CryptoSm\Interface\HashInterface;
+
+class Sm3 implements HashInterface
 {
     private const IV = [
         0x7380166f,
@@ -22,7 +24,12 @@ class Sm3
         return self::computeHash($data);
     }
 
-    public static function hash(string $data): string
+    public static function hashStatic(string $data): string
+    {
+        return self::sm3($data);
+    }
+
+    public function hash(string $data): string
     {
         return self::sm3($data);
     }

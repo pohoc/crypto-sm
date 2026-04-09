@@ -7,6 +7,7 @@ namespace CryptoSm\SM4;
 use CryptoSm\Exception\CryptoException;
 use CryptoSm\Exception\InvalidKeyException;
 use CryptoSm\Interface\CipherInterface;
+use CryptoSm\Utils\Hex;
 
 class Sm4 implements CipherInterface
 {
@@ -55,6 +56,9 @@ class Sm4 implements CipherInterface
             return bin2hex($cipher);
         }
 
+        if (!preg_match('/^[0-9a-fA-F]+$/', $data) || strlen($data) % 2 !== 0) {
+            throw new InvalidKeyException('Invalid ciphertext hex');
+        }
         $cipher = hex2bin($data);
         if ($cipher === false || strlen($cipher) % 16 !== 0) {
             throw new InvalidKeyException('Invalid ciphertext hex');
@@ -113,19 +117,6 @@ class Sm4 implements CipherInterface
 
     public static function hexToBytesStatic(string $hex): array
     {
-        $hex = preg_replace('/[^0-9a-fA-F]/', '', $hex);
-        if (strlen($hex) % 2 !== 0) {
-            $hex = '0' . $hex;
-        }
-        $bytes = [];
-        for ($i = 0; $i < strlen($hex); $i += 2) {
-            $bytes[] = hexdec(substr($hex, $i, 2));
-        }
-        return $bytes;
-    }
-
-    public static function utf8ToArray(string $str): array
-    {
-        return array_values(unpack('C*', $str));
+        return Hex::toBytes($hex);
     }
 }

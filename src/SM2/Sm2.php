@@ -4,13 +4,15 @@ declare(strict_types=1);
 
 namespace CryptoSm\SM2;
 
+use CryptoSm\Crypto\Asn1;
 use CryptoSm\Exception\CryptoException;
 use CryptoSm\Exception\InvalidKeyException;
+use CryptoSm\Interface\CipherInterface;
 use CryptoSm\Interface\SignerInterface;
 use CryptoSm\SM3\Sm3;
 use CryptoSm\Utils\Hex;
 
-class Sm2 implements SignerInterface
+class Sm2 implements SignerInterface, CipherInterface
 {
     public const CIPHER_MODE_1 = 1; // C1C3C2
     public const CIPHER_MODE_0 = 0; // C1C2C3
@@ -24,6 +26,20 @@ class Sm2 implements SignerInterface
         'gY' => 'bc3736a2f4f6779c59bdcee36b692153d0a9877cc62a474002df32e52139f0a0',
     ];
 
+    /** @var array<string, \GMP>|null Cached GMP objects for curve parameters */
+    private static ?array $gmpCache = null;
+
+    private static function gmpParam(string $key): \GMP
+    {
+        if (self::$gmpCache === null) {
+            self::$gmpCache = [];
+        }
+        if (!isset(self::$gmpCache[$key])) {
+            self::$gmpCache[$key] = gmp_init(self::$eccTable[$key], 16);
+        }
+        return self::$gmpCache[$key];
+    }
+
     public static function generateKeyPairHex(): Keypair
     {
         $pair = self::generateKeyPair();
@@ -32,7 +48,7 @@ class Sm2 implements SignerInterface
 
     private static function generateKeyPair(): array
     {
-        $n = gmp_init(self::$eccTable['n'], 16);
+        $n = self::gmpParam('n');
         do {
             $d = gmp_random_range(gmp_init(1), gmp_sub($n, gmp_init(1)));
         } while (gmp_cmp($d, 1) < 0 || gmp_cmp($d, $n) >= 0);
@@ -52,37 +68,52 @@ class Sm2 implements SignerInterface
             throw new InvalidKeyException('Invalid public key');
         }
 
-        do {
-            $k = bin2hex(random_bytes(32));
+        $dataLen = strlen($data);
+        $k = bin2hex(random_bytes(32));
 
-            $x1y1 = self::pointMultiply($k);
-            $x1 = substr($x1y1, 0, 64);
-            $y1 = substr($x1y1, 64);
-            $C1 = $x1y1;
+        $x1y1 = self::pointMultiply($k);
+        $x1 = substr($x1y1, 0, 64);
+        $y1 = substr($x1y1, 64);
+        $C1 = $x1y1;
 
-            $x2y2 = self::pointMultiply($publicKey, $k);
-            $x2 = substr($x2y2, 0, 64);
-            $y2 = substr($x2y2, 64);
+        $x2y2 = self::pointMultiply($publicKey, $k);
+        $x2 = substr($x2y2, 0, 64);
+        $y2 = substr($x2y2, 64);
 
-            $dataLen = strlen($data);
-            $t = self::kdf($x2 . $y2, $dataLen);
-            if (self::isAllZero($t)) {
-                continue;
+        $t = self::kdf($x2 . $y2, $dataLen);
+        if ($dataLen > 0) {
+            $maxRetries = 100;
+            $retry = 0;
+            while (self::isAllZero($t)) {
+                $retry++;
+                if ($retry >= $maxRetries) {
+                    throw new CryptoException('SM2 encryption failed: KDF derived all-zero key after max retries');
+                }
+                $k = bin2hex(random_bytes(32));
+                $x1y1 = self::pointMultiply($k);
+                $x1 = substr($x1y1, 0, 64);
+                $C1 = $x1y1;
+                $x2y2 = self::pointMultiply($publicKey, $k);
+                $x2 = substr($x2y2, 0, 64);
+                $y2 = substr($x2y2, 64);
+                $t = self::kdf($x2 . $y2, $dataLen);
             }
+        }
 
-            $C2 = '';
-            for ($i = 0; $i < $dataLen; $i++) {
-                $C2 .= chr(ord($data[$i]) ^ ord($t[$i]));
-            }
-            $C2Hex = bin2hex($C2);
-            $C3 = Sm3::sm3(Hex::fromHex($x2) . $data . Hex::fromHex($y2));
-        } while (false);
+        $C2 = '';
+        for ($i = 0; $i < $dataLen; $i++) {
+            $C2 .= chr(ord($data[$i]) ^ ord($t[$i]));
+        }
+        $C2Hex = bin2hex($C2);
+        $C3 = Sm3::sm3(Hex::fromHex($x2) . $data . Hex::fromHex($y2));
 
         return $cipherMode === self::CIPHER_MODE_1 ? $C1 . $C3 . $C2Hex : $C1 . $C2Hex . $C3;
     }
 
     public static function doDecrypt(string $data, string $privateKey, ?Sm2CipherOptions $options = null): string
     {
+        self::validatePrivateKey($privateKey);
+
         $options ??= new Sm2CipherOptions();
         $cipherMode = $options->getCipherMode();
 
@@ -99,8 +130,8 @@ class Sm2 implements SignerInterface
             $C3 = substr($data, -64);
         }
 
-        $p = gmp_init(self::$eccTable['p'], 16);
-        $a = gmp_init(self::$eccTable['a'], 16);
+        $p = self::gmpParam('p');
+        $a = self::gmpParam('a');
         $C1Point = self::parsePoint($C1);
         if ($C1Point === null || !self::isOnCurve($C1)) {
             throw new InvalidKeyException('Invalid C1');
@@ -112,7 +143,7 @@ class Sm2 implements SignerInterface
 
         $dataLen = strlen($C2) / 2;
         $t = self::kdf($x2 . $y2, $dataLen);
-        if (self::isAllZero($t)) {
+        if ($dataLen > 0 && self::isAllZero($t)) {
             throw new CryptoException('KDF derived all-zero key');
         }
 
@@ -124,7 +155,7 @@ class Sm2 implements SignerInterface
 
         $u = Sm3::sm3(Hex::fromHex($x2) . $M . Hex::fromHex($y2));
         if ($u !== $C3) {
-            throw new CryptoException('SM2 signature verification failed');
+            throw new CryptoException('SM2 decryption failed: ciphertext verification failed');
         }
 
         return $M;
@@ -159,12 +190,17 @@ class Sm2 implements SignerInterface
         $publicKey = $options->getPublicKey();
         $userId = $options->getUserId();
 
+        self::validatePrivateKey($privateKey);
+
         $e = self::calcE($data, $hash, $publicKey ?: self::pointMultiply($privateKey), $userId);
 
-        $n = gmp_init(self::$eccTable['n'], 16);
+        $n = self::gmpParam('n');
         $d = gmp_init($privateKey, 16);
         $dPlus1Inv = gmp_invert(gmp_add($d, gmp_init(1)), $n);
 
+        $maxRetries = 100;
+        $retry = 0;
+        $s = gmp_init(0);
         do {
             $k = gmp_random_range(gmp_init(1), gmp_sub($n, gmp_init(1)));
             $x1y1 = self::pointMultiply(gmp_strval($k, 16));
@@ -181,12 +217,17 @@ class Sm2 implements SignerInterface
 
             $tmp = gmp_mod(gmp_sub($k, gmp_mul($r, $d)), $n);
             $s = gmp_mod(gmp_mul($dPlus1Inv, $tmp), $n);
+
+            $retry++;
+            if ($retry >= $maxRetries) {
+                throw new CryptoException('SM2 signature failed: max retries exceeded');
+            }
         } while (gmp_cmp($s, 0) === 0);
 
         $rHex = str_pad(gmp_strval($r, 16), 64, '0', STR_PAD_LEFT);
         $sHex = str_pad(gmp_strval($s, 16), 64, '0', STR_PAD_LEFT);
 
-        return $der ? self::createDerSignature($sHex, $rHex) : $rHex . $sHex;
+        return $der ? Asn1::encodeDerSignature($rHex, $sHex) : $rHex . $sHex;
     }
 
     public static function doVerifySignature(string $data, string $signature, string $publicKey, ?SignatureOptions $options = null): bool
@@ -200,12 +241,13 @@ class Sm2 implements SignerInterface
             return false;
         }
 
-        [$x1Hex, $sHex] = $der ? self::parseDerSignature($signature) : [substr($signature, 0, 64), substr($signature, 64)];
-        if ($x1Hex === null || $sHex === null) {
+        try {
+            [$x1Hex, $sHex] = $der ? Asn1::decodeDerSignature($signature) : [substr($signature, 0, 64), substr($signature, 64)];
+        } catch (CryptoException) {
             return false;
         }
 
-        $n = gmp_init(self::$eccTable['n'], 16);
+        $n = self::gmpParam('n');
         $x1Dec = gmp_init($x1Hex, 16);
         $sDec = gmp_init($sHex, 16);
         if (gmp_cmp($x1Dec, 0) <= 0 || gmp_cmp($x1Dec, $n) >= 0 || gmp_cmp($sDec, 0) <= 0 || gmp_cmp($sDec, $n) >= 0) {
@@ -224,8 +266,8 @@ class Sm2 implements SignerInterface
             return false;
         }
 
-        $p = gmp_init(self::$eccTable['p'], 16);
-        $a = gmp_init(self::$eccTable['a'], 16);
+        $p = self::gmpParam('p');
+        $a = self::gmpParam('a');
         $sum = self::pointAdd(
             gmp_init(substr($point1, 0, 64), 16),
             gmp_init(substr($point1, 64), 16),
@@ -289,11 +331,11 @@ class Sm2 implements SignerInterface
 
     private static function pointMultiply(string $point, ?string $factor = null): ?string
     {
-        $p = gmp_init(self::$eccTable['p'], 16);
-        $a = gmp_init(self::$eccTable['a'], 16);
+        $p = self::gmpParam('p');
+        $a = self::gmpParam('a');
 
-        $Gx = gmp_init(self::$eccTable['gX'], 16);
-        $Gy = gmp_init(self::$eccTable['gY'], 16);
+        $Gx = self::gmpParam('gX');
+        $Gy = self::gmpParam('gY');
 
         if (strlen($point) > 64) {
             $pointX = gmp_init(substr($point, 0, 64), 16);
@@ -370,62 +412,16 @@ class Sm2 implements SignerInterface
         return ['x' => $x3, 'y' => $y3];
     }
 
-    private static function createDerSignature(string $sHex, string $rHex): string
+    private static function validatePrivateKey(string $privateKey): void
     {
-        $rDer = self::derEncodeInteger(Hex::toBytes($rHex));
-        $sDer = self::derEncodeInteger(Hex::toBytes($sHex));
-        $seq = $rDer . $sDer;
-        return bin2hex(chr(0x30) . chr(strlen($seq)) . $seq);
-    }
-
-    private static function derEncodeInteger(array $bytes): string
-    {
-        while (count($bytes) > 1 && $bytes[0] === 0) {
-            array_shift($bytes);
+        if (!preg_match('/^[0-9a-fA-F]{64}$/', $privateKey)) {
+            throw new InvalidKeyException('Private key must be 256 bits (64 hex chars)');
         }
-        if ($bytes[0] > 0x7f) {
-            array_unshift($bytes, 0);
+        $n = self::gmpParam('n');
+        $d = gmp_init($privateKey, 16);
+        if (gmp_cmp($d, 1) < 0 || gmp_cmp($d, $n) >= 0) {
+            throw new InvalidKeyException('Private key must be in range [1, n-1]');
         }
-        $len = count($bytes);
-        $lenBytes = $len < 128 ? chr($len) : chr(0x81) . chr($len);
-        return chr(0x02) . $lenBytes . implode('', array_map('chr', $bytes));
-    }
-
-    private static function parseDerSignature(string $sig): array
-    {
-        if (strlen($sig) < 8 || substr($sig, 0, 2) !== '30') {
-            return [null, null];
-        }
-        $offset = 2;
-        $seqLen = hexdec(substr($sig, $offset, 2));
-        $offset += 2;
-        if (substr($sig, $offset, 2) !== '02') {
-            return [null, null];
-        }
-        $offset += 2;
-        $rLen = hexdec(substr($sig, $offset, 2));
-        $offset += 2;
-        $r = substr($sig, $offset, $rLen * 2);
-        $offset += $rLen * 2;
-        if (substr($sig, $offset, 2) !== '02') {
-            return [null, null];
-        }
-        $offset += 2;
-        $sLen = hexdec(substr($sig, $offset, 2));
-        $offset += 2;
-        $s = substr($sig, $offset, $sLen * 2);
-
-        $r = ltrim($r, '0');
-        $s = ltrim($s, '0');
-        $r = $r === '' ? '0' : $r;
-        $s = $s === '' ? '0' : $s;
-        if (strlen($r) % 2 === 1) {
-            $r = '0' . $r;
-        }
-        if (strlen($s) % 2 === 1) {
-            $s = '0' . $s;
-        }
-        return [str_pad($r, 64, '0', STR_PAD_LEFT), str_pad($s, 64, '0', STR_PAD_LEFT)];
     }
 
     private static function isAllZero(string $data): bool
@@ -438,9 +434,9 @@ class Sm2 implements SignerInterface
         if (strlen($publicKey) !== 128) {
             return false;
         }
-        $p = gmp_init(self::$eccTable['p'], 16);
-        $a = gmp_init(self::$eccTable['a'], 16);
-        $b = gmp_init(self::$eccTable['b'], 16);
+        $p = self::gmpParam('p');
+        $a = self::gmpParam('a');
+        $b = self::gmpParam('b');
         $x = gmp_init(substr($publicKey, 0, 64), 16);
         $y = gmp_init(substr($publicKey, 64), 16);
 

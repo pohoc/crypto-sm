@@ -62,7 +62,10 @@ class Asn1
 
     public static function encodeInteger(string $hex): string
     {
-        $bytes = hex2bin($hex);
+        if (!preg_match('/^[0-9a-fA-F]+$/', $hex)) {
+            throw new CryptoException('Invalid hex for integer encoding');
+        }
+        $bytes = @hex2bin($hex);
         if ($bytes === false) {
             throw new CryptoException('Invalid hex for integer encoding');
         }
@@ -98,7 +101,10 @@ class Asn1
 
     public static function decodeDerSignature(string $der): array
     {
-        $data = hex2bin($der);
+        if (!preg_match('/^[0-9a-fA-F]+$/', $der)) {
+            throw new CryptoException('Invalid DER signature hex');
+        }
+        $data = @hex2bin($der);
         if ($data === false) {
             throw new CryptoException('Invalid DER signature hex');
         }
