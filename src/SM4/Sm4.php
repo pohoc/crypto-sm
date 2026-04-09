@@ -134,8 +134,8 @@ class Sm4 implements CipherInterface
             return $data;
         }
         $block = 16;
-        $pad = $block - (strlen($data) % $block);
-        $pad = $pad === 0 ? $block : $pad;
+        $remainder = strlen($data) % $block;
+        $pad = $remainder === 0 ? $block : $block - $remainder;
         return $data . str_repeat(chr($pad), $pad);
     }
 

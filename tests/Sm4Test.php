@@ -30,7 +30,7 @@ class Sm4Test extends TestCase
         $encrypted = Sm4::encrypt($msg, $this->key, $options);
         $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
 
-        $this->assertIsString($decrypted);
+        $this->assertNotEmpty($decrypted);
     }
 
     public function testSm4KeyValidation()
@@ -196,8 +196,7 @@ class Sm4Test extends TestCase
         $hex = '0123456789abcdef';
         $bytes = Sm4::hexToBytesStatic($hex);
 
-        $this->assertIsArray($bytes);
-        $this->assertEquals(8, count($bytes));
+        $this->assertCount(8, $bytes);
     }
 
     public function testSm4MultipleEncryptDecrypt()

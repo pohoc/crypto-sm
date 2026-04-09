@@ -30,24 +30,16 @@ class ExceptionTest extends TestCase
 
     public function testCryptoExceptionCanBeCaughtByBase()
     {
-        try {
-            throw new CryptoException('crypto error');
-        } catch (SmCryptoException $e) {
-            $this->assertEquals('crypto error', $e->getMessage());
-            return;
-        }
-        $this->fail('CryptoException should be caught as SmCryptoException');
+        $this->expectException(SmCryptoException::class);
+        $this->expectExceptionMessage('crypto error');
+        throw new CryptoException('crypto error');
     }
 
     public function testInvalidKeyExceptionCanBeCaughtByBase()
     {
-        try {
-            throw new InvalidKeyException('key error');
-        } catch (SmCryptoException $e) {
-            $this->assertEquals('key error', $e->getMessage());
-            return;
-        }
-        $this->fail('InvalidKeyException should be caught as SmCryptoException');
+        $this->expectException(SmCryptoException::class);
+        $this->expectExceptionMessage('key error');
+        throw new InvalidKeyException('key error');
     }
 
     public function testBothExceptionsCaughtByBase()

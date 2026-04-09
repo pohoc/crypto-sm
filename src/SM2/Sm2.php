@@ -272,6 +272,7 @@ class Sm2 implements SignerInterface, CipherInterface
         $maxRetries = 100;
         $retry = 0;
         $s = gmp_init(0);
+        $r = gmp_init(0);
         do {
             $k = gmp_random_range(gmp_init(1), gmp_sub($n, gmp_init(1)));
             $x1y1 = self::pointMultiply(gmp_strval($k, 16));
@@ -370,7 +371,6 @@ class Sm2 implements SignerInterface, CipherInterface
         if ($hash) {
             $x = substr($publicKey, 0, 64);
             $y = substr($publicKey, 64);
-            $userId = is_string($userId) ? $userId : '';
             $z = Sm3::sm3(self::getUserIdHash($userId, $x, $y));
             $dataHex = empty($data) ? '00' : $z . bin2hex($data);
             return gmp_init($dataHex, 16);
