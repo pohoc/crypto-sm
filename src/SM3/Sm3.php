@@ -6,6 +6,9 @@ namespace CryptoSm\SM3;
 
 use CryptoSm\Interface\HashInterface;
 
+/**
+ * SM3 cryptographic hash algorithm implementation (GM/T 0004-2012).
+ */
 class Sm3 implements HashInterface
 {
     private const IV = [
@@ -19,16 +22,34 @@ class Sm3 implements HashInterface
         0xb0fb0e4e,
     ];
 
+    /**
+     * Compute SM3 hash of the given data.
+     *
+     * @param string $data Input data
+     * @return string 64-character hex string (256-bit hash)
+     */
     public static function sm3(string $data): string
     {
         return self::computeHash($data);
     }
 
+    /**
+     * Alias for sm3() — static hash computation (HashInterface naming convention).
+     *
+     * @param string $data Input data
+     * @return string 64-character hex string
+     */
     public static function hashStatic(string $data): string
     {
         return self::sm3($data);
     }
 
+    /**
+     * Instance method for hash computation (HashInterface).
+     *
+     * @param string $data Input data
+     * @return string 64-character hex string
+     */
     public function hash(string $data): string
     {
         return self::sm3($data);

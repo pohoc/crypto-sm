@@ -6,12 +6,23 @@ namespace CryptoSm\Crypto;
 
 use CryptoSm\Exception\CryptoException;
 
+/**
+ * ASN.1/DER encode/decode utility for SM2 signatures.
+ */
 class Asn1
 {
     public const TAG_SEQUENCE = 0x30;
     public const TAG_INTEGER = 0x02;
     public const TAG_OCTET_STRING = 0x04;
 
+    /**
+     * Decode an ASN.1 INTEGER from DER data.
+     *
+     * @param string $data   DER-encoded data
+     * @param int    $offset Current offset (passed by reference, updated after read)
+     * @return string Decimal string representation of the integer
+     * @throws CryptoException If the INTEGER tag is invalid
+     */
     public static function decodeInteger(string $data, int &$offset): int|string
     {
         if (ord($data[$offset]) !== self::TAG_INTEGER) {
@@ -41,6 +52,14 @@ class Asn1
         return gmp_strval(gmp_init($value, 16), 10);
     }
 
+    /**
+     * Decode an ASN.1 SEQUENCE header from DER data.
+     *
+     * @param string $data   DER-encoded data
+     * @param int    $offset Current offset (passed by reference, updated after read)
+     * @return int Length of the SEQUENCE content
+     * @throws CryptoException If the SEQUENCE tag is invalid
+     */
     public static function decodeSequence(string $data, int &$offset): int
     {
         if (ord($data[$offset]) !== self::TAG_SEQUENCE) {
@@ -60,6 +79,13 @@ class Asn1
         return $seqLen;
     }
 
+    /**
+     * Encode a hex value as an ASN.1 INTEGER.
+     *
+     * @param string $hex Hex string of the integer value
+     * @return string DER-encoded INTEGER (binary)
+     * @throws CryptoException If the hex string is invalid
+     */
     public static function encodeInteger(string $hex): string
     {
         if (!preg_match('/^[0-9a-fA-F]+$/', $hex)) {
@@ -84,6 +110,12 @@ class Asn1
         return chr(self::TAG_INTEGER) . $lenByte . $bytes;
     }
 
+    /**
+     * Encode content as an ASN.1 SEQUENCE.
+     *
+     * @param string $content DER-encoded content
+     * @return string DER-encoded SEQUENCE (binary)
+     */
     public static function encodeSequence(string $content): string
     {
         $len = strlen($content);
@@ -91,6 +123,13 @@ class Asn1
         return chr(self::TAG_SEQUENCE) . $lenByte . $content;
     }
 
+    /**
+     * Encode an SM2 signature in DER format.
+     *
+     * @param string $rHex R component as 64-char hex string
+     * @param string $sHex S component as 64-char hex string
+     * @return string DER-encoded signature as hex string
+     */
     public static function encodeDerSignature(string $rHex, string $sHex): string
     {
         $rBytes = self::encodeInteger($rHex);
@@ -99,6 +138,13 @@ class Asn1
         return bin2hex(self::encodeSequence($sequence));
     }
 
+    /**
+     * Decode a DER-encoded SM2 signature.
+     *
+     * @param string $der DER-encoded signature as hex string
+     * @return array{string,string} [rHex, sHex] — 64-char zero-padded hex strings
+     * @throws CryptoException If the DER data is invalid
+     */
     public static function decodeDerSignature(string $der): array
     {
         if (!preg_match('/^[0-9a-fA-F]+$/', $der)) {

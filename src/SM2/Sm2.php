@@ -14,8 +14,11 @@ use CryptoSm\Utils\Hex;
 
 class Sm2 implements SignerInterface, CipherInterface
 {
-    public const CIPHER_MODE_1 = 1; // C1C3C2
-    public const CIPHER_MODE_0 = 0; // C1C2C3
+    /** @var int C1C3C2 cipher mode (recommended per GM/T 0003-2012) */
+    public const CIPHER_MODE_1 = 1;
+
+    /** @var int C1C2C3 cipher mode (legacy, for backward compatibility) */
+    public const CIPHER_MODE_0 = 0;
 
     private static array $eccTable = [
         'n' => 'FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123',
@@ -40,6 +43,11 @@ class Sm2 implements SignerInterface, CipherInterface
         return self::$gmpCache[$key];
     }
 
+    /**
+     * Generate a new SM2 key pair.
+     *
+     * @return Keypair Generated key pair with hex-encoded keys
+     */
     public static function generateKeyPairHex(): Keypair
     {
         $pair = self::generateKeyPair();
@@ -59,6 +67,16 @@ class Sm2 implements SignerInterface, CipherInterface
         return ['privateKey' => $privateKey, 'publicKey' => $publicKey];
     }
 
+    /**
+     * Encrypt data using SM2.
+     *
+     * @param string           $data     Plaintext data to encrypt
+     * @param string           $publicKey 128-char hex string (uncompressed public key)
+     * @param Sm2CipherOptions|null $options Cipher mode options (default: C1C3C2)
+     * @return string Hex-encoded ciphertext
+     * @throws InvalidKeyException If public key is invalid
+     * @throws CryptoException    If encryption fails (e.g., KDF zero-key after max retries)
+     */
     public static function doEncrypt(string $data, string $publicKey, ?Sm2CipherOptions $options = null): string
     {
         $options ??= new Sm2CipherOptions();
@@ -110,6 +128,16 @@ class Sm2 implements SignerInterface, CipherInterface
         return $cipherMode === self::CIPHER_MODE_1 ? $C1 . $C3 . $C2Hex : $C1 . $C2Hex . $C3;
     }
 
+    /**
+     * Decrypt data using SM2.
+     *
+     * @param string           $data      Hex-encoded ciphertext
+     * @param string           $privateKey 64-char hex string
+     * @param Sm2CipherOptions|null $options Cipher mode options (must match encryption)
+     * @return string Decrypted plaintext
+     * @throws InvalidKeyException If private key or ciphertext is invalid
+     * @throws CryptoException    If decryption or verification fails
+     */
     public static function doDecrypt(string $data, string $privateKey, ?Sm2CipherOptions $options = null): string
     {
         self::validatePrivateKey($privateKey);
@@ -161,26 +189,69 @@ class Sm2 implements SignerInterface, CipherInterface
         return $M;
     }
 
+    /**
+     * Encrypt data using SM2 (CipherInterface compliant).
+     *
+     * @param string $data     Plaintext data
+     * @param string $publicKey 128-char hex string
+     * @param mixed  $options  Sm2CipherOptions instance or null
+     * @return string Hex-encoded ciphertext
+     */
     public static function encrypt(string $data, string $publicKey, mixed $options = null): string
     {
         return self::doEncrypt($data, $publicKey, $options);
     }
 
+    /**
+     * Decrypt data using SM2 (CipherInterface compliant).
+     *
+     * @param string $data      Hex-encoded ciphertext
+     * @param string $privateKey 64-char hex string
+     * @param mixed  $options   Sm2CipherOptions instance or null
+     * @return string Decrypted plaintext
+     */
     public static function decrypt(string $data, string $privateKey, mixed $options = null): string
     {
         return self::doDecrypt($data, $privateKey, $options);
     }
 
+    /**
+     * Sign data using SM2 (SignerInterface compliant).
+     *
+     * @param string $data      Data to sign
+     * @param string $privateKey 64-char hex string
+     * @param mixed  $options   SignatureOptions instance or null
+     * @return string Signature (hex or DER depending on options)
+     */
     public static function sign(string $data, string $privateKey, mixed $options = null): string
     {
         return self::doSignature($data, $privateKey, $options);
     }
 
+    /**
+     * Verify SM2 signature (SignerInterface compliant).
+     *
+     * @param string $data      Original data
+     * @param string $signature Signature to verify
+     * @param string $publicKey 128-char hex string
+     * @param mixed  $options   SignatureOptions instance or null
+     * @return bool True if signature is valid
+     */
     public static function verify(string $data, string $signature, string $publicKey, mixed $options = null): bool
     {
         return self::doVerifySignature($data, $signature, $publicKey, $options);
     }
 
+    /**
+     * Sign data using SM2.
+     *
+     * @param string              $data      Data to sign
+     * @param string              $privateKey 64-char hex string
+     * @param SignatureOptions|null $options  Signature options (DER, hash, publicKey, userId)
+     * @return string Hex-encoded signature (or DER hex if options.der=true)
+     * @throws InvalidKeyException If private key is invalid
+     * @throws CryptoException    If signing fails after max retries
+     */
     public static function doSignature(string $data, string $privateKey, ?SignatureOptions $options = null): string
     {
         $options ??= new SignatureOptions();
@@ -230,6 +301,15 @@ class Sm2 implements SignerInterface, CipherInterface
         return $der ? Asn1::encodeDerSignature($rHex, $sHex) : $rHex . $sHex;
     }
 
+    /**
+     * Verify an SM2 signature.
+     *
+     * @param string              $data      Original data
+     * @param string              $signature Signature to verify (hex or DER)
+     * @param string              $publicKey 128-char hex string
+     * @param SignatureOptions|null $options  Signature options (must match signing)
+     * @return bool True if signature is valid
+     */
     public static function doVerifySignature(string $data, string $signature, string $publicKey, ?SignatureOptions $options = null): bool
     {
         $options ??= new SignatureOptions();

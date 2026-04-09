@@ -9,19 +9,59 @@ use CryptoSm\Exception\InvalidKeyException;
 use CryptoSm\Interface\CipherInterface;
 use CryptoSm\Utils\Hex;
 
+/**
+ * SM4 block cipher implementation (GM/T 0002-2012).
+ *
+ * Supports ECB and CBC modes with PKCS5 padding.
+ * CBC mode is the default; ECB is not recommended for new applications.
+ */
 class Sm4 implements CipherInterface
 {
+    /** @var string Electronic Codebook mode (not recommended) */
     public const MODE_ECB = 'ecb';
+
+    /** @var string Cipher Block Chaining mode (default, recommended) */
     public const MODE_CBC = 'cbc';
 
+    /**
+     * Encrypt data using SM4.
+     *
+     * @param string $data    Plaintext data to encrypt
+     * @param string $key     32-character hex string (128-bit key)
+     * @param mixed  $options Sm4Options instance or null for defaults
+     * @return string Hex-encoded ciphertext
+     * @throws InvalidKeyException If key or options are invalid
+     * @throws CryptoException    If encryption fails
+     */
     public static function encrypt(string $data, string $key, mixed $options = null): string
     {
         return self::crypt($data, $key, true, $options instanceof Sm4Options ? $options : null);
     }
 
+    /**
+     * Decrypt data using SM4.
+     *
+     * @param string $data    Hex-encoded ciphertext
+     * @param string $key     32-character hex string (128-bit key)
+     * @param mixed  $options Sm4Options instance or null for defaults
+     * @return string Decrypted plaintext
+     * @throws InvalidKeyException If key, ciphertext, or options are invalid
+     * @throws CryptoException    If decryption fails
+     */
     public static function decrypt(string $data, string $key, mixed $options = null): string
     {
         return self::crypt($data, $key, false, $options instanceof Sm4Options ? $options : null);
+    }
+
+    /**
+     * Convert a hex string to a byte array.
+     *
+     * @param string $hex Hex string to convert
+     * @return array<int,int> Array of byte values
+     */
+    public static function hexToBytesStatic(string $hex): array
+    {
+        return Hex::toBytes($hex);
     }
 
     private static function crypt(string $data, string $key, bool $encrypt, ?Sm4Options $options = null): string
@@ -113,10 +153,5 @@ class Sm4 implements CipherInterface
             throw new InvalidKeyException('Invalid PKCS padding');
         }
         return substr($data, 0, $len - $pad);
-    }
-
-    public static function hexToBytesStatic(string $hex): array
-    {
-        return Hex::toBytes($hex);
     }
 }

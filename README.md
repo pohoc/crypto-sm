@@ -1,6 +1,6 @@
 # Crypto-SM
 
-[![PHP Version](https://img.shields.io/badge/PHP-8.0+-blue.svg)](https://www.php.net/)
+[![PHP Version](https://img.shields.io/badge/PHP-8.0%20~%208.5-blue.svg)](https://www.php.net/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 国密算法 SM2、SM3、SM4 的 PHP 实现。
@@ -13,8 +13,9 @@ composer require pohoc/crypto-sm
 
 ## 环境要求
 
-- PHP >= 8.0
+- PHP 8.0 ~ 8.5
 - GMP 扩展
+- OpenSSL 扩展
 
 ### 安装 GMP 扩展
 
@@ -117,12 +118,14 @@ use CryptoSm\SM4\Sm4Options;
 $key = '0123456789abcdeffedcba9876543210'; // 32 位十六进制，128 bit
 $data = 'Hello World';
 
-// ECB 模式（默认），返回十六进制密文
-$ciphertext = Sm4::encrypt($data, $key);
-$plaintext = Sm4::decrypt($ciphertext, $key);
+// CBC 模式（默认），需提供 32 位十六进制 IV
+$iv  = '000102030405060708090a0b0c0d0e0f';
+$options = (new Sm4Options())->setIv($iv);
+$ciphertext = Sm4::encrypt($data, $key, $options);
+$plaintext = Sm4::decrypt($ciphertext, $key, $options);
 
-// CBC 模式，IV 同样为 32 位十六进制
-$options = (new Sm4Options())->setMode('cbc')->setIv('000102030405060708090a0b0c0d0e0f');
+// ECB 模式（不推荐，仅用于兼容旧系统）
+$options = (new Sm4Options())->setMode(Sm4::MODE_ECB);
 $ciphertext = Sm4::encrypt($data, $key, $options);
 $plaintext = Sm4::decrypt($ciphertext, $key, $options);
 ```
@@ -154,6 +157,28 @@ composer install
 vendor/bin/phpunit
 ```
 
+## 代码质量
+
+```bash
+# 静态分析
+vendor/bin/phpstan analyse
+
+# 代码风格检查
+vendor/bin/php-cs-fixer fix --dry-run --diff
+
+# 代码风格修复
+vendor/bin/php-cs-fixer fix
+
+# 一键检查全部
+composer check
+```
+
+## 文档
+
+- [变更日志](CHANGELOG.md)
+- [贡献指南](CONTRIBUTING.md)
+- [安全策略](SECURITY.md)
+
 ## 许可证
 
-MIT 许可证
+[MIT](LICENSE)
