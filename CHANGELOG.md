@@ -2,6 +2,17 @@
 
 本文件由脚本自动生成，基于 git tag 和 commit 记录。
 
+## [v0.0.3] - 2026-04-09
+
+### 修复
+- 修复 PHPStan 静态分析错误
+- 修复安全漏洞与代码质量，增加国密标准测试向量
+- 完善 SmCrypto 门面类方法并修正文档中的密钥长度错误
+- 替换 metcalfc/changelog-generator 为原生 git 命令生成 changelog
+
+### 新增
+- 完善项目工程化与代码质量
+
 ## [v0.0.2] - 2026-03-19
 
 ### 新增
@@ -26,3 +37,4 @@
 
 [v0.0.1]: https://github.com/pohoc/crypto-sm/releases/tag/v0.0.1
 [v0.0.2]: https://github.com/pohoc/crypto-sm/compare/v0.0.1...v0.0.2
+[v0.0.3]: https://github.com/pohoc/crypto-sm/compare/v0.0.2...v0.0.3
