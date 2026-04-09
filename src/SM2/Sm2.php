@@ -314,12 +314,17 @@ class Sm2 implements SignerInterface, CipherInterface
     public static function doVerifySignature(string $data, string $signature, string $publicKey, ?SignatureOptions $options = null): bool
     {
         $options ??= new SignatureOptions();
-        $der = $options->getDer() || strtolower(substr($signature, 0, 2)) === '30';
+        $der = $options->getDer();
         $hash = $options->getHash();
         $userId = $options->getUserId();
 
         if (!self::isOnCurve($publicKey)) {
             return false;
+        }
+
+        // 自动检测 DER：签名以 0x30 (SEQUENCE tag) 开头且长度不等于 128（plain signature 固定 128 hex chars）
+        if (!$der && strlen($signature) !== 128) {
+            $der = true;
         }
 
         try {
