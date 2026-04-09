@@ -18,9 +18,9 @@ class Asn1
     /**
      * Decode an ASN.1 INTEGER from DER data.
      *
-     * @param string $data   DER-encoded data
-     * @param int    $offset Current offset (passed by reference, updated after read)
-     * @return string Decimal string representation of the integer
+     * @param  string          $data   DER-encoded data
+     * @param  int             $offset Current offset (passed by reference, updated after read)
+     * @return string          Decimal string representation of the integer
      * @throws CryptoException If the INTEGER tag is invalid
      */
     public static function decodeInteger(string $data, int &$offset): int|string
@@ -55,9 +55,9 @@ class Asn1
     /**
      * Decode an ASN.1 SEQUENCE header from DER data.
      *
-     * @param string $data   DER-encoded data
-     * @param int    $offset Current offset (passed by reference, updated after read)
-     * @return int Length of the SEQUENCE content
+     * @param  string          $data   DER-encoded data
+     * @param  int             $offset Current offset (passed by reference, updated after read)
+     * @return int             Length of the SEQUENCE content
      * @throws CryptoException If the SEQUENCE tag is invalid
      */
     public static function decodeSequence(string $data, int &$offset): int
@@ -82,8 +82,8 @@ class Asn1
     /**
      * Encode a hex value as an ASN.1 INTEGER.
      *
-     * @param string $hex Hex string of the integer value
-     * @return string DER-encoded INTEGER (binary)
+     * @param  string          $hex Hex string of the integer value
+     * @return string          DER-encoded INTEGER (binary)
      * @throws CryptoException If the hex string is invalid
      */
     public static function encodeInteger(string $hex): string
@@ -113,7 +113,7 @@ class Asn1
     /**
      * Encode content as an ASN.1 SEQUENCE.
      *
-     * @param string $content DER-encoded content
+     * @param  string $content DER-encoded content
      * @return string DER-encoded SEQUENCE (binary)
      */
     public static function encodeSequence(string $content): string
@@ -126,8 +126,8 @@ class Asn1
     /**
      * Encode an SM2 signature in DER format.
      *
-     * @param string $rHex R component as 64-char hex string
-     * @param string $sHex S component as 64-char hex string
+     * @param  string $rHex R component as 64-char hex string
+     * @param  string $sHex S component as 64-char hex string
      * @return string DER-encoded signature as hex string
      */
     public static function encodeDerSignature(string $rHex, string $sHex): string
@@ -141,9 +141,9 @@ class Asn1
     /**
      * Decode a DER-encoded SM2 signature.
      *
-     * @param string $der DER-encoded signature as hex string
+     * @param  string               $der DER-encoded signature as hex string
      * @return array{string,string} [rHex, sHex] — 64-char zero-padded hex strings
-     * @throws CryptoException If the DER data is invalid
+     * @throws CryptoException      If the DER data is invalid
      */
     public static function decodeDerSignature(string $der): array
     {

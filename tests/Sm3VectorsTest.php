@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace CryptoSm\Tests;
 
 use CryptoSm\SM3\Sm3;
@@ -182,7 +184,7 @@ class Sm3VectorsTest extends TestCase
         foreach ($messages as $msg) {
             $h1 = Sm3::sm3($msg);
             $h2 = Sm3::sm3($msg);
-            $this->assertEquals($h1, $h2, "SM3 must be deterministic for message of length " . strlen($msg));
+            $this->assertEquals($h1, $h2, 'SM3 must be deterministic for message of length ' . strlen($msg));
         }
     }
 

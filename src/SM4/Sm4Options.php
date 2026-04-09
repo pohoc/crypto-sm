@@ -34,7 +34,7 @@ class Sm4Options
     /**
      * Set the padding mode.
      *
-     * @param string $padding Padding mode: "pkcs5" (default) or "none"
+     * @param  string              $padding Padding mode: "pkcs5" (default) or "none"
      * @return self
      * @throws InvalidKeyException If padding value is invalid
      */
@@ -60,7 +60,7 @@ class Sm4Options
     /**
      * Set the cipher mode.
      *
-     * @param string $mode Cipher mode: Sm4::MODE_ECB or Sm4::MODE_CBC
+     * @param  string              $mode Cipher mode: Sm4::MODE_ECB or Sm4::MODE_CBC
      * @return self
      * @throws InvalidKeyException If mode value is invalid
      */
@@ -87,7 +87,7 @@ class Sm4Options
     /**
      * Set the initialization vector (IV).
      *
-     * @param string $iv 32-character hex string (128 bits)
+     * @param  string              $iv 32-character hex string (128 bits)
      * @return self
      * @throws InvalidKeyException If IV format is invalid
      */

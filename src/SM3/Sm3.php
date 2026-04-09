@@ -25,7 +25,7 @@ class Sm3 implements HashInterface
     /**
      * Compute SM3 hash of the given data.
      *
-     * @param string $data Input data
+     * @param  string $data Input data
      * @return string 64-character hex string (256-bit hash)
      */
     public static function sm3(string $data): string
@@ -36,7 +36,7 @@ class Sm3 implements HashInterface
     /**
      * Alias for sm3() — static hash computation (HashInterface naming convention).
      *
-     * @param string $data Input data
+     * @param  string $data Input data
      * @return string 64-character hex string
      */
     public static function hashStatic(string $data): string
@@ -47,7 +47,7 @@ class Sm3 implements HashInterface
     /**
      * Instance method for hash computation (HashInterface).
      *
-     * @param string $data Input data
+     * @param  string $data Input data
      * @return string 64-character hex string
      */
     public function hash(string $data): string

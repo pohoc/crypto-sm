@@ -1,12 +1,14 @@
 <?php
 
+declare(strict_types=1);
+
 namespace CryptoSm\Tests;
 
-use CryptoSm\SM2\Sm2;
-use CryptoSm\SM2\SignatureOptions;
-use CryptoSm\SM2\Sm2CipherOptions;
-use CryptoSm\Exception\InvalidKeyException;
 use CryptoSm\Exception\CryptoException;
+use CryptoSm\Exception\InvalidKeyException;
+use CryptoSm\SM2\SignatureOptions;
+use CryptoSm\SM2\Sm2;
+use CryptoSm\SM2\Sm2CipherOptions;
 use PHPUnit\Framework\TestCase;
 
 /**

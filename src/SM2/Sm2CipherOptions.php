@@ -30,7 +30,7 @@ class Sm2CipherOptions
      * C1C3C2 (mode 1) is recommended per GM/T 0003-2012.
      * C1C2C3 (mode 0) is the older format, kept for backward compatibility.
      *
-     * @param int $cipherMode Sm2::CIPHER_MODE_1 or Sm2::CIPHER_MODE_0
+     * @param  int                 $cipherMode Sm2::CIPHER_MODE_1 or Sm2::CIPHER_MODE_0
      * @return self
      * @throws InvalidKeyException If cipher mode is invalid
      */

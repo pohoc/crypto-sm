@@ -1,9 +1,11 @@
 <?php
 
+declare(strict_types=1);
+
 namespace CryptoSm\Tests;
 
-use PHPUnit\Framework\TestCase;
 use CryptoSm\Utils\Hex;
+use PHPUnit\Framework\TestCase;
 
 class HexTest extends TestCase
 {

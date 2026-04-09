@@ -25,7 +25,7 @@ class SignatureOptions
     /**
      * Set whether to use DER encoding for the signature.
      *
-     * @param bool $der True to encode signature in DER format
+     * @param  bool $der True to encode signature in DER format
      * @return self
      */
     public function setDer(bool $der): self
@@ -48,7 +48,7 @@ class SignatureOptions
      * When true, the message is hashed with SM3 along with the user ID
      * and public key per the SM2 standard.
      *
-     * @param bool $hash True to enable hashing
+     * @param  bool $hash True to enable hashing
      * @return self
      */
     public function setHash(bool $hash): self
@@ -71,7 +71,7 @@ class SignatureOptions
      * Required when hash=true. If not set, the public key will be
      * derived from the private key during signing.
      *
-     * @param string $publicKey 128-character hex string (uncompressed, without "04" prefix)
+     * @param  string $publicKey 128-character hex string (uncompressed, without "04" prefix)
      * @return self
      */
     public function setPublicKey(string $publicKey): self
@@ -93,7 +93,7 @@ class SignatureOptions
      *
      * Default: "1234567812345678" (the standard default ID per GM/T 0003-2012).
      *
-     * @param string $userId User ID string
+     * @param  string $userId User ID string
      * @return self
      */
     public function setUserId(string $userId): self

@@ -1,10 +1,12 @@
 <?php
 
+declare(strict_types=1);
+
 namespace CryptoSm\Tests;
 
-use CryptoSm\Exception\SmCryptoException;
 use CryptoSm\Exception\CryptoException;
 use CryptoSm\Exception\InvalidKeyException;
+use CryptoSm\Exception\SmCryptoException;
 use PHPUnit\Framework\TestCase;
 
 /**

@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace CryptoSm\Tests;
 
 use CryptoSm\SM2\Keypair;

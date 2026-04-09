@@ -1,10 +1,12 @@
 <?php
 
+declare(strict_types=1);
+
 namespace CryptoSm\Tests;
 
-use PHPUnit\Framework\TestCase;
 use CryptoSm\Crypto\Asn1;
 use CryptoSm\Exception\CryptoException;
+use PHPUnit\Framework\TestCase;
 
 class Asn1Test extends TestCase
 {

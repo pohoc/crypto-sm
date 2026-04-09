@@ -1,9 +1,11 @@
 <?php
 
+declare(strict_types=1);
+
 namespace CryptoSm\Tests;
 
-use PHPUnit\Framework\TestCase;
 use CryptoSm\SM3\Sm3;
+use PHPUnit\Framework\TestCase;
 
 class Sm3Test extends TestCase
 {
@@ -53,7 +55,7 @@ class Sm3Test extends TestCase
     {
         $result1 = Sm3::sm3('input1');
         $result2 = Sm3::sm3('input2');
-        
+
         $this->assertNotEquals($result1, $result2);
     }
 
@@ -61,7 +63,7 @@ class Sm3Test extends TestCase
     {
         $longInput = str_repeat('a', 10000);
         $result = Sm3::sm3($longInput);
-        
+
         $this->assertNotEmpty($result);
         $this->assertEquals(64, strlen($result));
     }
@@ -70,7 +72,7 @@ class Sm3Test extends TestCase
     {
         $specialChars = "!@#$%^&*()_+-=[]{}|;':\",./<>?\n\t\r";
         $result = Sm3::sm3($specialChars);
-        
+
         $this->assertNotEmpty($result);
         $this->assertEquals(64, strlen($result));
     }
@@ -79,7 +81,7 @@ class Sm3Test extends TestCase
     {
         $binaryData = chr(0) . chr(128) . chr(255);
         $result = Sm3::sm3($binaryData);
-        
+
         $this->assertNotEmpty($result);
         $this->assertEquals(64, strlen($result));
     }
@@ -102,11 +104,11 @@ class Sm3Test extends TestCase
     {
         $msg = 'consistent test';
         $results = [];
-        
+
         for ($i = 0; $i < 10; $i++) {
             $results[] = Sm3::sm3($msg);
         }
-        
+
         $firstResult = $results[0];
         foreach ($results as $result) {
             $this->assertEquals($firstResult, $result);
@@ -124,7 +126,7 @@ class Sm3Test extends TestCase
     {
         $unicode = '😀🎉🚀';
         $result = Sm3::sm3($unicode);
-        
+
         $this->assertNotEmpty($result);
         $this->assertEquals(64, strlen($result));
     }
@@ -133,7 +135,7 @@ class Sm3Test extends TestCase
     {
         $whitespace = " \t\n\r";
         $result = Sm3::sm3($whitespace);
-        
+
         $this->assertNotEmpty($result);
         $this->assertEquals(64, strlen($result));
     }
@@ -145,9 +147,9 @@ class Sm3Test extends TestCase
             'test2',
             'hello world',
             '你好世界',
-            str_repeat('x', 1000)
+            str_repeat('x', 1000),
         ];
-        
+
         foreach ($messages as $msg) {
             $hash1 = Sm3::sm3($msg);
             $hash2 = Sm3::sm3($msg);

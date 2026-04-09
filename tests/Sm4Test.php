@@ -1,11 +1,13 @@
 <?php
 
+declare(strict_types=1);
+
 namespace CryptoSm\Tests;
 
-use PHPUnit\Framework\TestCase;
+use CryptoSm\Exception\InvalidKeyException;
 use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
-use CryptoSm\Exception\InvalidKeyException;
+use PHPUnit\Framework\TestCase;
 
 class Sm4Test extends TestCase
 {
@@ -206,7 +208,7 @@ class Sm4Test extends TestCase
             'medium length message',
             'a bit longer message for testing',
             str_repeat('x', 100),
-            '中文测试消息'
+            '中文测试消息',
         ];
         $options = (new Sm4Options())->setMode('ecb');
 

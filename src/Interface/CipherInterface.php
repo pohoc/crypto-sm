@@ -12,9 +12,9 @@ interface CipherInterface
     /**
      * Encrypt data.
      *
-     * @param string $data    Data to encrypt
-     * @param string $key     Encryption key
-     * @param mixed  $options Algorithm-specific options
+     * @param  string $data    Data to encrypt
+     * @param  string $key     Encryption key
+     * @param  mixed  $options Algorithm-specific options
      * @return string Encrypted data
      */
     public static function encrypt(string $data, string $key, mixed $options = null): string;
@@ -22,9 +22,9 @@ interface CipherInterface
     /**
      * Decrypt data.
      *
-     * @param string $data    Data to decrypt
-     * @param string $key     Decryption key
-     * @param mixed  $options Algorithm-specific options
+     * @param  string $data    Data to decrypt
+     * @param  string $key     Decryption key
+     * @param  mixed  $options Algorithm-specific options
      * @return string Decrypted data
      */
     public static function decrypt(string $data, string $key, mixed $options = null): string;

@@ -1,13 +1,15 @@
 <?php
 
+declare(strict_types=1);
+
 namespace CryptoSm\Tests;
 
-use PHPUnit\Framework\TestCase;
-use CryptoSm\SmCrypto;
 use CryptoSm\SM2\Keypair;
 use CryptoSm\SM2\SignatureOptions;
 use CryptoSm\SM2\Sm2CipherOptions;
 use CryptoSm\SM4\Sm4Options;
+use CryptoSm\SmCrypto;
+use PHPUnit\Framework\TestCase;
 
 class SmCryptoTest extends TestCase
 {

@@ -26,12 +26,12 @@ class Sm4 implements CipherInterface
     /**
      * Encrypt data using SM4.
      *
-     * @param string $data    Plaintext data to encrypt
-     * @param string $key     32-character hex string (128-bit key)
-     * @param mixed  $options Sm4Options instance or null for defaults
-     * @return string Hex-encoded ciphertext
+     * @param  string              $data    Plaintext data to encrypt
+     * @param  string              $key     32-character hex string (128-bit key)
+     * @param  mixed               $options Sm4Options instance or null for defaults
+     * @return string              Hex-encoded ciphertext
      * @throws InvalidKeyException If key or options are invalid
-     * @throws CryptoException    If encryption fails
+     * @throws CryptoException     If encryption fails
      */
     public static function encrypt(string $data, string $key, mixed $options = null): string
     {
@@ -41,12 +41,12 @@ class Sm4 implements CipherInterface
     /**
      * Decrypt data using SM4.
      *
-     * @param string $data    Hex-encoded ciphertext
-     * @param string $key     32-character hex string (128-bit key)
-     * @param mixed  $options Sm4Options instance or null for defaults
-     * @return string Decrypted plaintext
+     * @param  string              $data    Hex-encoded ciphertext
+     * @param  string              $key     32-character hex string (128-bit key)
+     * @param  mixed               $options Sm4Options instance or null for defaults
+     * @return string              Decrypted plaintext
      * @throws InvalidKeyException If key, ciphertext, or options are invalid
-     * @throws CryptoException    If decryption fails
+     * @throws CryptoException     If decryption fails
      */
     public static function decrypt(string $data, string $key, mixed $options = null): string
     {
@@ -56,7 +56,7 @@ class Sm4 implements CipherInterface
     /**
      * Convert a hex string to a byte array.
      *
-     * @param string $hex Hex string to convert
+     * @param  string         $hex Hex string to convert
      * @return array<int,int> Array of byte values
      */
     public static function hexToBytesStatic(string $hex): array
