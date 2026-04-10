@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace CryptoSm\Interface;
+namespace CryptoSm\Interfaces;
 
 /**
  * Interface for symmetric/asymmetric cipher implementations.

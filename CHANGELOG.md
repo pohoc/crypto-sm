@@ -2,6 +2,11 @@
 
 本文件由脚本自动生成，基于 git tag 和 commit 记录。
 
+## [v0.1.0] - 2026-04-10
+
+### 新增
+- upgrade PHPStan to level 8, fix SM2 d=n-1 edge case, migrate Interface→Interfaces, update CI
+
 ## [v0.0.3] - 2026-04-09
 
 ### 修复
@@ -13,9 +18,6 @@
 
 ### 新增
 - 完善项目工程化与代码质量
-
-### 文档
-- 更新变更日志 v0.0.3
 
 ## [v0.0.2] - 2026-03-19
 
@@ -42,3 +44,4 @@
 [v0.0.1]: https://github.com/pohoc/crypto-sm/releases/tag/v0.0.1
 [v0.0.2]: https://github.com/pohoc/crypto-sm/compare/v0.0.1...v0.0.2
 [v0.0.3]: https://github.com/pohoc/crypto-sm/compare/v0.0.2...v0.0.3
+[v0.1.0]: https://github.com/pohoc/crypto-sm/compare/v0.0.3...v0.1.0

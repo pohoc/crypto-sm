@@ -17,7 +17,7 @@ class Hex
      */
     public static function toBytes(string $hex): array
     {
-        $hex = preg_replace('/[^0-9a-fA-F]/', '', $hex);
+        $hex = preg_replace('/[^0-9a-fA-F]/', '', $hex) ?? '';
         if (strlen($hex) % 2 !== 0) {
             $hex = '0' . $hex;
         }
@@ -25,7 +25,8 @@ class Hex
         if ($binary === false) {
             return [];
         }
-        return array_values(unpack('C*', $binary));
+        $unpacked = unpack('C*', $binary);
+        return $unpacked === false ? [] : array_values($unpacked);
     }
 
     /**
@@ -58,7 +59,7 @@ class Hex
      */
     public static function fromHex(string $hex): string
     {
-        $hex = preg_replace('/[^0-9a-fA-F]/', '', $hex);
+        $hex = preg_replace('/[^0-9a-fA-F]/', '', $hex) ?? '';
         if (strlen($hex) % 2 !== 0) {
             $hex = '0' . $hex;
         }

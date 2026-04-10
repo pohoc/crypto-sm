@@ -6,7 +6,7 @@ namespace CryptoSm\SM4;
 
 use CryptoSm\Exception\CryptoException;
 use CryptoSm\Exception\InvalidKeyException;
-use CryptoSm\Interface\CipherInterface;
+use CryptoSm\Interfaces\CipherInterface;
 use CryptoSm\Utils\Hex;
 
 /**
@@ -69,17 +69,24 @@ class Sm4 implements CipherInterface
         $options ??= new Sm4Options();
         $mode = strtolower($options->getMode());
         $padding = strtolower($options->getPadding());
-        $iv = $options->getIv();
 
         self::validateHexKey($key);
+        $ivBin = '';
         if ($mode === self::MODE_CBC) {
+            $iv = $options->getIv();
             self::validateHexKey($iv, 'IV');
             $ivBin = hex2bin($iv);
+            if ($ivBin === false) {
+                throw new InvalidKeyException('Invalid IV hex');
+            }
         } elseif ($mode !== self::MODE_ECB) {
             throw new InvalidKeyException('Mode must be ecb or cbc');
         }
 
         $keyBin = hex2bin($key);
+        if ($keyBin === false) {
+            throw new InvalidKeyException('Invalid key hex');
+        }
 
         if ($encrypt) {
             $input = self::maybePad($data, $padding);

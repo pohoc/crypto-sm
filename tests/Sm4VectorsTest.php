@@ -51,9 +51,10 @@ class Sm4VectorsTest extends TestCase
      * ECB 单块加密
      * GM/T 0002-2012 附录
      */
-    public function testEcbSingleBlock()
+    public function testEcbSingleBlock(): void
     {
         $plain = hex2bin(self::STD_PLAINTEXT_HEX);
+        $this->assertNotFalse($plain);
         $cipher = Sm4::encrypt($plain, self::STD_KEY, (new Sm4Options())->setMode('ecb')->setPadding('none'));
         $this->assertEquals(self::STD_CIPHERTEXT_1, $cipher);
     }
@@ -61,7 +62,7 @@ class Sm4VectorsTest extends TestCase
     /**
      * ECB 单块解密
      */
-    public function testEcbSingleBlockDecrypt()
+    public function testEcbSingleBlockDecrypt(): void
     {
         $plain = Sm4::decrypt(self::STD_CIPHERTEXT_1, self::STD_KEY, (new Sm4Options())->setMode('ecb')->setPadding('none'));
         $this->assertEquals(hex2bin(self::STD_PLAINTEXT_HEX), $plain);
@@ -71,14 +72,16 @@ class Sm4VectorsTest extends TestCase
      * ECB 100 万轮迭代加密
      * GM/T 0002-2012 附录: 反复加密 100 万次
      */
-    public function testEcbMillionRoundIteration()
+    public function testEcbMillionRoundIteration(): void
     {
         $opts = (new Sm4Options())->setMode('ecb')->setPadding('none');
         $data = hex2bin(self::STD_PLAINTEXT_HEX);
+        $this->assertNotFalse($data);
 
         for ($i = 0; $i < 1_000_000; $i++) {
             $hex = Sm4::encrypt($data, self::STD_KEY, $opts);
             $data = hex2bin($hex);
+            $this->assertNotFalse($data);
         }
 
         $this->assertEquals(self::STD_CIPHERTEXT_MILLION, bin2hex($data));
@@ -91,10 +94,11 @@ class Sm4VectorsTest extends TestCase
     /**
      * CBC 单块加密
      */
-    public function testCbcSingleBlock()
+    public function testCbcSingleBlock(): void
     {
         $iv = '000102030405060708090a0b0c0d0e0f';
         $plain = hex2bin(self::STD_PLAINTEXT_HEX);
+        $this->assertNotFalse($plain);
         $opts = (new Sm4Options())->setMode('cbc')->setPadding('none')->setIv($iv);
 
         $cipher = Sm4::encrypt($plain, self::STD_KEY, $opts);
@@ -104,7 +108,7 @@ class Sm4VectorsTest extends TestCase
     /**
      * CBC 单块解密
      */
-    public function testCbcSingleBlockDecrypt()
+    public function testCbcSingleBlockDecrypt(): void
     {
         $iv = '000102030405060708090a0b0c0d0e0f';
         $opts = (new Sm4Options())->setMode('cbc')->setPadding('none')->setIv($iv);
@@ -116,13 +120,14 @@ class Sm4VectorsTest extends TestCase
     /**
      * CBC 多块加密/解密
      */
-    public function testCbcMultiBlock()
+    public function testCbcMultiBlock(): void
     {
         $iv = '000102030405060708090a0b0c0d0e0f';
         $opts = (new Sm4Options())->setMode('cbc')->setPadding('none')->setIv($iv);
 
         // 2 块明文
         $plain = hex2bin(self::STD_PLAINTEXT_HEX . self::STD_PLAINTEXT_HEX);
+        $this->assertNotFalse($plain);
         $cipher = Sm4::encrypt($plain, self::STD_KEY, $opts);
         $this->assertEquals(64, strlen($cipher));
 
@@ -137,7 +142,7 @@ class Sm4VectorsTest extends TestCase
     /**
      * 1 字节消息 → 16 字节填充 → 32 hex 密文
      */
-    public function testPkcs7PaddingOneByte()
+    public function testPkcs7PaddingOneByte(): void
     {
         $opts = (new Sm4Options())->setMode('ecb');
         $cipher = Sm4::encrypt('a', self::STD_KEY, $opts);
@@ -150,7 +155,7 @@ class Sm4VectorsTest extends TestCase
     /**
      * 15 字节消息 → 1 字节填充 → 32 hex 密文
      */
-    public function testPkcs7PaddingFifteenBytes()
+    public function testPkcs7PaddingFifteenBytes(): void
     {
         $opts = (new Sm4Options())->setMode('ecb');
         $msg = str_repeat('a', 15);
@@ -165,7 +170,7 @@ class Sm4VectorsTest extends TestCase
      * 16 字节消息 → 16 字节填充 → 64 hex 密文
      * PKCS7: 整块时额外添加一个完整填充块
      */
-    public function testPkcs7PaddingExactBlock()
+    public function testPkcs7PaddingExactBlock(): void
     {
         $opts = (new Sm4Options())->setMode('ecb');
         $msg = str_repeat('a', 16);
@@ -179,7 +184,7 @@ class Sm4VectorsTest extends TestCase
     /**
      * No padding 模式: 非对齐数据应抛异常
      */
-    public function testNoPaddingNonAlignedRejected()
+    public function testNoPaddingNonAlignedRejected(): void
     {
         $this->expectException(\CryptoSm\Exception\InvalidKeyException::class);
         $opts = (new Sm4Options())->setMode('ecb')->setPadding('none');
@@ -193,7 +198,7 @@ class Sm4VectorsTest extends TestCase
     /**
      * ECB + CBC 对相同数据各自正确加解密
      */
-    public function testEcbAndCbcBothCorrect()
+    public function testEcbAndCbcBothCorrect(): void
     {
         $iv = '000102030405060708090a0b0c0d0e0f';
         $msg = str_repeat('A', 32); // 2 blocks
@@ -215,7 +220,7 @@ class Sm4VectorsTest extends TestCase
     /**
      * ECB 相同明文产生相同密文（ECB 的固有特性，也是其不安全的原因）
      */
-    public function testEcbSameBlockProducesSameCiphertext()
+    public function testEcbSameBlockProducesSameCiphertext(): void
     {
         $opts = (new Sm4Options())->setMode('ecb')->setPadding('none');
         $block = hex2bin('0123456789abcdeffedcba9876543210');
@@ -231,7 +236,7 @@ class Sm4VectorsTest extends TestCase
     /**
      * CBC 相同明文产生不同密文（因为 IV XOR）
      */
-    public function testCbcSameBlockProducesDifferentCiphertext()
+    public function testCbcSameBlockProducesDifferentCiphertext(): void
     {
         $iv = '000102030405060708090a0b0c0d0e0f';
         $opts = (new Sm4Options())->setMode('cbc')->setPadding('none')->setIv($iv);
@@ -251,7 +256,7 @@ class Sm4VectorsTest extends TestCase
     /**
      * 空消息 + PKCS7 填充
      */
-    public function testEmptyMessageWithPkcs7()
+    public function testEmptyMessageWithPkcs7(): void
     {
         $opts = (new Sm4Options())->setMode('ecb');
         $cipher = Sm4::encrypt('', self::STD_KEY, $opts);
@@ -263,7 +268,7 @@ class Sm4VectorsTest extends TestCase
     /**
      * 空消息 + 无填充
      */
-    public function testEmptyMessageNoPadding()
+    public function testEmptyMessageNoPadding(): void
     {
         $opts = (new Sm4Options())->setMode('ecb')->setPadding('none');
         // 空数据长度为 0，是 16 的倍数
@@ -274,7 +279,7 @@ class Sm4VectorsTest extends TestCase
     /**
      * 全零密钥
      */
-    public function testAllZeroKey()
+    public function testAllZeroKey(): void
     {
         $key = str_repeat('0', 32);
         $msg = 'test message';
@@ -287,7 +292,7 @@ class Sm4VectorsTest extends TestCase
     /**
      * 全一密钥
      */
-    public function testAllOneKey()
+    public function testAllOneKey(): void
     {
         $key = str_repeat('f', 32);
         $msg = 'test message';
@@ -300,7 +305,7 @@ class Sm4VectorsTest extends TestCase
     /**
      * 全零 IV
      */
-    public function testAllZeroIv()
+    public function testAllZeroIv(): void
     {
         $iv = str_repeat('0', 32);
         $msg = 'test message';
@@ -313,7 +318,7 @@ class Sm4VectorsTest extends TestCase
     /**
      * 大数据量加解密
      */
-    public function testLargeData()
+    public function testLargeData(): void
     {
         $iv = '000102030405060708090a0b0c0d0e0f';
         $msg = str_repeat('Large data test. ', 1000);

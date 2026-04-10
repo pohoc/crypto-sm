@@ -13,12 +13,11 @@ class Sm4Options
 {
     private string $padding = 'pkcs5';
     private string $mode = 'cbc';
-    private string $iv = '';
+    private ?string $iv = null;
 
     public function __construct()
     {
-        // CBC 模式默认生成随机 IV，确保 new Sm4Options() 可直接使用
-        $this->iv = bin2hex(random_bytes(16));
+        // IV is lazily initialized on first access for CBC mode
     }
 
     /**
@@ -76,11 +75,15 @@ class Sm4Options
 
     /**
      * Get the initialization vector (IV) as hex string.
+     * Lazily generates a random IV for CBC mode if not explicitly set.
      *
      * @return string 32-character hex string (128 bits)
      */
     public function getIv(): string
     {
+        if ($this->iv === null) {
+            $this->iv = bin2hex(random_bytes(16));
+        }
         return $this->iv;
     }
 

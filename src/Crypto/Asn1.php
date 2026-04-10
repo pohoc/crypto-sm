@@ -23,7 +23,7 @@ class Asn1
      * @return string          Decimal string representation of the integer
      * @throws CryptoException If the INTEGER tag is invalid
      */
-    public static function decodeInteger(string $data, int &$offset): int|string
+    public static function decodeInteger(string $data, int &$offset): string
     {
         if (ord($data[$offset]) !== self::TAG_INTEGER) {
             throw new CryptoException('Invalid INTEGER tag');
@@ -80,6 +80,31 @@ class Asn1
     }
 
     /**
+     * Encode a DER length field using the minimum number of bytes.
+     *
+     * For lengths < 128: single byte.
+     * For lengths >= 128: 0x80 | N followed by N big-endian bytes of the length.
+     *
+     * @param  int    $len Length value to encode
+     * @return string DER-encoded length bytes
+     */
+    private static function encodeLength(int $len): string
+    {
+        if ($len < 128) {
+            return chr($len);
+        }
+
+        $lenBytes = '';
+        $temp = $len;
+        do {
+            $lenBytes = chr($temp & 0xFF) . $lenBytes;
+            $temp >>= 8;
+        } while ($temp > 0);
+
+        return chr(0x80 | strlen($lenBytes)) . $lenBytes;
+    }
+
+    /**
      * Encode a hex value as an ASN.1 INTEGER.
      *
      * @param  string          $hex Hex string of the integer value
@@ -105,7 +130,7 @@ class Asn1
         }
 
         $len = strlen($bytes);
-        $lenByte = $len < 128 ? chr($len) : chr(0x80 | strlen(pack('N', $len))) . pack('N', $len);
+        $lenByte = self::encodeLength($len);
 
         return chr(self::TAG_INTEGER) . $lenByte . $bytes;
     }
@@ -119,7 +144,7 @@ class Asn1
     public static function encodeSequence(string $content): string
     {
         $len = strlen($content);
-        $lenByte = $len < 128 ? chr($len) : chr(0x80 | 1) . chr($len);
+        $lenByte = self::encodeLength($len);
         return chr(self::TAG_SEQUENCE) . $lenByte . $content;
     }
 

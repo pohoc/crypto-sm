@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace CryptoSm\SM3;
 
-use CryptoSm\Interface\HashInterface;
+use CryptoSm\Interfaces\HashInterface;
 
 /**
  * SM3 cryptographic hash algorithm implementation (GM/T 0004-2012).
@@ -105,7 +105,8 @@ class Sm3 implements HashInterface
     /** @return array<int,array<int,int>> */
     private static function expand(string $block): array
     {
-        $w = array_values(unpack('N16', $block));
+        $unpacked = unpack('N16', $block);
+        $w = $unpacked === false ? [] : array_values($unpacked);
         for ($j = 16; $j < 68; $j++) {
             $w[$j] = self::p1($w[$j - 16] ^ $w[$j - 9] ^ self::rol($w[$j - 3], 15))
                 ^ self::rol($w[$j - 13], 7) ^ $w[$j - 6];

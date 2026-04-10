@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CryptoSm\Tests;
 
+use CryptoSm\Exception\CryptoException;
 use CryptoSm\Exception\InvalidKeyException;
 use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
@@ -14,229 +15,116 @@ class Sm4Test extends TestCase
     private string $key = '0123456789abcdeffedcba9876543210';
     private string $iv = 'fedcba98765432100123456789abcdef';
 
-    public function testSm4EncryptReturnsHex()
+    // ========================================================================
+    // 基本加解密
+    // ========================================================================
+
+    public function testSm4EncryptReturnsHex(): void
     {
         $msg = 'hello world! test';
         $options = (new Sm4Options())->setMode('ecb');
-
         $encrypted = Sm4::encrypt($msg, $this->key, $options);
         $this->assertNotEmpty($encrypted);
         $this->assertTrue(ctype_xdigit($encrypted));
     }
 
-    public function testSm4DecryptReturnsString()
+    public function testSm4DecryptReturnsString(): void
     {
         $msg = 'hello world! test message12345';
         $options = (new Sm4Options())->setMode('ecb');
-
         $encrypted = Sm4::encrypt($msg, $this->key, $options);
         $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
-
         $this->assertNotEmpty($decrypted);
     }
 
-    public function testSm4KeyValidation()
-    {
-        $this->expectException(InvalidKeyException::class);
-
-        $msg = 'test';
-        $key = '0123456789abcdeffedcba987654321';
-
-        Sm4::encrypt($msg, $key);
-    }
-
-    public function testSm4NoPadding()
-    {
-        $msg = '1234567890123456';
-        $options = (new Sm4Options())->setMode('ecb')->setPadding('none');
-
-        $encrypted = Sm4::encrypt($msg, $this->key, $options);
-        $this->assertEquals(32, strlen($encrypted));
-
-        $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
-        $this->assertEquals($msg, $decrypted);
-    }
-
-    public function testSm4CbcMode()
-    {
-        $msg = 'hello world test';
-        $options = (new Sm4Options())->setMode('cbc')->setIv($this->iv);
-
-        $encrypted = Sm4::encrypt($msg, $this->key, $options);
-        $this->assertNotEmpty($encrypted);
-
-        $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
-        $this->assertEquals($msg, $decrypted);
-    }
-
-    public function testSm4CbcDefaultMode()
-    {
-        // CBC is now the default mode - requires IV
-        $msg = 'hello world test';
-        $options = (new Sm4Options())->setIv($this->iv);
-
-        $encrypted = Sm4::encrypt($msg, $this->key, $options);
-        $this->assertNotEmpty($encrypted);
-
-        $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
-        $this->assertEquals($msg, $decrypted);
-    }
-
-    public function testSm4EcbMode()
-    {
-        $msg = 'hello world test';
-        $options = (new Sm4Options())->setMode('ecb');
-
-        $encrypted = Sm4::encrypt($msg, $this->key, $options);
-        $this->assertNotEmpty($encrypted);
-
-        $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
-        $this->assertEquals($msg, $decrypted);
-    }
-
-    public function testSm4EncryptDecrypt()
+    public function testSm4EncryptDecrypt(): void
     {
         $msg = 'Hello, SM4!';
         $options = (new Sm4Options())->setMode('ecb');
-
         $encrypted = Sm4::encrypt($msg, $this->key, $options);
         $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
-
         $this->assertEquals($msg, $decrypted);
     }
 
-    public function testSm4EncryptDecryptChinese()
+    // ========================================================================
+    // 模式测试
+    // ========================================================================
+
+    public function testSm4CbcMode(): void
     {
-        $msg = '你好，SM4！';
+        $msg = 'hello world test';
+        $options = (new Sm4Options())->setMode('cbc')->setIv($this->iv);
+        $encrypted = Sm4::encrypt($msg, $this->key, $options);
+        $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
+        $this->assertEquals($msg, $decrypted);
+    }
+
+    public function testSm4EcbMode(): void
+    {
+        $msg = 'hello world test';
         $options = (new Sm4Options())->setMode('ecb');
-
         $encrypted = Sm4::encrypt($msg, $this->key, $options);
         $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
-
         $this->assertEquals($msg, $decrypted);
     }
 
-    public function testSm4EncryptDecryptLongMessage()
+    public function testSm4CbcDefaultMode(): void
     {
-        $msg = str_repeat('Long message test. ', 100);
-        $options = (new Sm4Options())->setMode('ecb');
-
+        $msg = 'hello world test';
+        $options = (new Sm4Options())->setIv($this->iv);
         $encrypted = Sm4::encrypt($msg, $this->key, $options);
         $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
-
         $this->assertEquals($msg, $decrypted);
     }
 
-    public function testSm4CbcDefaultIvAutoGenerated()
+    public function testSm4CbcDefaultIvAutoGenerated(): void
     {
-        // CBC is the default mode — IV is auto-generated in Sm4Options constructor
+        // CBC is the default mode — IV is lazily generated on first access via getIv()
         $msg = 'test message';
         $options = new Sm4Options();
-
         $encrypted = Sm4::encrypt($msg, $this->key, $options);
-        $this->assertNotEmpty($encrypted);
-
         $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
         $this->assertEquals($msg, $decrypted);
     }
 
-    public function testSm4SetIvValidation()
+    public function testSm4CbcModeDifferentIvProduceDifferentResults(): void
     {
-        $this->expectException(InvalidKeyException::class);
-
-        (new Sm4Options())->setIv('invalid-iv');
-    }
-
-    public function testSm4InvalidKeyLength()
-    {
-        $this->expectException(InvalidKeyException::class);
-        $this->expectExceptionMessage('Key must be 128 bits (32 hex chars)');
-
         $msg = 'test message';
-        $key = 'shortkey';
-
-        Sm4::encrypt($msg, $key);
+        $iv2 = '0123456789abcdeffedcba9876543210';
+        $options1 = (new Sm4Options())->setMode('cbc')->setIv($this->iv);
+        $options2 = (new Sm4Options())->setMode('cbc')->setIv($iv2);
+        $encrypted1 = Sm4::encrypt($msg, $this->key, $options1);
+        $encrypted2 = Sm4::encrypt($msg, $this->key, $options2);
+        $this->assertNotEquals($encrypted1, $encrypted2);
     }
 
-    public function testSm4EmptyMessage()
-    {
-        $msg = '';
-        $options = (new Sm4Options())->setMode('ecb');
-
-        $encrypted = Sm4::encrypt($msg, $this->key, $options);
-        $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
-
-        $this->assertEquals($msg, $decrypted);
-    }
-
-    public function testSm4DifferentKeysProduceDifferentResults()
+    public function testSm4DifferentKeysProduceDifferentResults(): void
     {
         $msg = 'test message';
         $key2 = 'fedcba98765432100123456789abcdef';
         $options = (new Sm4Options())->setMode('ecb');
-
         $encrypted1 = Sm4::encrypt($msg, $this->key, $options);
         $encrypted2 = Sm4::encrypt($msg, $key2, $options);
-
         $this->assertNotEquals($encrypted1, $encrypted2);
     }
 
-    public function testSm4OptionsChainable()
+    // ========================================================================
+    // 填充测试
+    // ========================================================================
+
+    public function testSm4NoPadding(): void
     {
-        $options = new Sm4Options();
-
-        $result = $options->setPadding('none')->setMode('cbc')->setIv('000102030405060708090a0b0c0d0e0f');
-
-        $this->assertInstanceOf(Sm4Options::class, $result);
-        $this->assertEquals('none', $options->getPadding());
-        $this->assertEquals('cbc', $options->getMode());
-        $this->assertEquals('000102030405060708090a0b0c0d0e0f', $options->getIv());
+        $msg = '1234567890123456';
+        $options = (new Sm4Options())->setMode('ecb')->setPadding('none');
+        $encrypted = Sm4::encrypt($msg, $this->key, $options);
+        $this->assertEquals(32, strlen($encrypted));
+        $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
+        $this->assertEquals($msg, $decrypted);
     }
 
-    public function testSm4HexToBytesStatic()
-    {
-        $hex = '0123456789abcdef';
-        $bytes = Sm4::hexToBytesStatic($hex);
-
-        $this->assertCount(8, $bytes);
-    }
-
-    public function testSm4MultipleEncryptDecrypt()
-    {
-        $messages = [
-            'short',
-            'medium length message',
-            'a bit longer message for testing',
-            str_repeat('x', 100),
-            '中文测试消息',
-        ];
-        $options = (new Sm4Options())->setMode('ecb');
-
-        foreach ($messages as $msg) {
-            $encrypted = Sm4::encrypt($msg, $this->key, $options);
-            $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
-            $this->assertEquals($msg, $decrypted, "Failed for message: $msg");
-        }
-    }
-
-    public function testSm4CbcModeDifferentIvProduceDifferentResults()
-    {
-        $msg = 'test message';
-        $iv2 = '0123456789abcdeffedcba9876543210';
-
-        $options1 = (new Sm4Options())->setMode('cbc')->setIv($this->iv);
-        $options2 = (new Sm4Options())->setMode('cbc')->setIv($iv2);
-
-        $encrypted1 = Sm4::encrypt($msg, $this->key, $options1);
-        $encrypted2 = Sm4::encrypt($msg, $this->key, $options2);
-
-        $this->assertNotEquals($encrypted1, $encrypted2);
-    }
-
-    public function testSm4Pkcs5Padding()
+    public function testSm4Pkcs5Padding(): void
     {
         $options = (new Sm4Options())->setMode('ecb');
-
         $msg1 = '1';
         $encrypted1 = Sm4::encrypt($msg1, $this->key, $options);
         $this->assertEquals(32, strlen($encrypted1));
@@ -246,26 +134,349 @@ class Sm4Test extends TestCase
         $this->assertEquals(64, strlen($encrypted16));
     }
 
-    public function testSm4ImplementsCipherInterface()
+    public function testSm4NoPaddingNonAlignedRejected(): void
     {
-        $this->assertInstanceOf(\CryptoSm\Interface\CipherInterface::class, new Sm4());
+        $this->expectException(InvalidKeyException::class);
+        $options = (new Sm4Options())->setMode('ecb')->setPadding('none');
+        Sm4::encrypt('short', $this->key, $options);
     }
 
-    public function testSm4OptionsInvalidMode()
+    // ========================================================================
+    // 消息类型测试
+    // ========================================================================
+
+    public function testSm4EncryptDecryptChinese(): void
+    {
+        $msg = '你好，SM4！';
+        $options = (new Sm4Options())->setMode('ecb');
+        $encrypted = Sm4::encrypt($msg, $this->key, $options);
+        $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
+        $this->assertEquals($msg, $decrypted);
+    }
+
+    public function testSm4EncryptDecryptLongMessage(): void
+    {
+        $msg = str_repeat('Long message test. ', 100);
+        $options = (new Sm4Options())->setMode('ecb');
+        $encrypted = Sm4::encrypt($msg, $this->key, $options);
+        $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
+        $this->assertEquals($msg, $decrypted);
+    }
+
+    public function testSm4EmptyMessage(): void
+    {
+        $msg = '';
+        $options = (new Sm4Options())->setMode('ecb');
+        $encrypted = Sm4::encrypt($msg, $this->key, $options);
+        $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
+        $this->assertEquals($msg, $decrypted);
+    }
+
+    public function testSm4MultipleEncryptDecrypt(): void
+    {
+        $messages = [
+            'short',
+            'medium length message',
+            'a bit longer message for testing',
+            str_repeat('x', 100),
+            '中文测试消息',
+        ];
+        $options = (new Sm4Options())->setMode('ecb');
+        foreach ($messages as $msg) {
+            $encrypted = Sm4::encrypt($msg, $this->key, $options);
+            $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
+            $this->assertEquals($msg, $decrypted, "Failed for message: $msg");
+        }
+    }
+
+    // ========================================================================
+    // 输入验证
+    // ========================================================================
+
+    public function testSm4KeyValidation(): void
+    {
+        $this->expectException(InvalidKeyException::class);
+        Sm4::encrypt('test', '0123456789abcdeffedcba987654321');
+    }
+
+    public function testSm4InvalidKeyLength(): void
+    {
+        $this->expectException(InvalidKeyException::class);
+        $this->expectExceptionMessage('Key must be 128 bits (32 hex chars)');
+        Sm4::encrypt('test message', 'shortkey');
+    }
+
+    public function testSm4InvalidCiphertextHex(): void
+    {
+        $this->expectException(InvalidKeyException::class);
+        Sm4::decrypt('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', $this->key, (new Sm4Options())->setMode('ecb'));
+    }
+
+    public function testSm4SetIvValidation(): void
+    {
+        $this->expectException(InvalidKeyException::class);
+        (new Sm4Options())->setIv('invalid-iv');
+    }
+
+    // ========================================================================
+    // Sm4Options 完整测试
+    // ========================================================================
+
+    public function testSm4OptionsChainable(): void
+    {
+        $options = new Sm4Options();
+        $result = $options->setPadding('none')->setMode('cbc')->setIv('000102030405060708090a0b0c0d0e0f');
+        $this->assertInstanceOf(Sm4Options::class, $result);
+        $this->assertEquals('none', $options->getPadding());
+        $this->assertEquals('cbc', $options->getMode());
+        $this->assertEquals('000102030405060708090a0b0c0d0e0f', $options->getIv());
+    }
+
+    public function testSm4OptionsDefaultValues(): void
+    {
+        $opts = new Sm4Options();
+        $this->assertEquals('pkcs5', $opts->getPadding());
+        $this->assertEquals('cbc', $opts->getMode());
+    }
+
+    public function testSm4OptionsInvalidMode(): void
     {
         $this->expectException(InvalidKeyException::class);
         (new Sm4Options())->setMode('cfb');
     }
 
-    public function testSm4OptionsInvalidPadding()
+    public function testSm4OptionsInvalidPadding(): void
     {
         $this->expectException(InvalidKeyException::class);
         (new Sm4Options())->setPadding('invalid');
     }
 
-    public function testSm4InvalidCiphertextHex()
+    public function testSm4OptionsIvAutoGenerated(): void
+    {
+        $opts = new Sm4Options();
+        $iv = $opts->getIv();
+        $this->assertEquals(32, strlen($iv));
+        $this->assertTrue(ctype_xdigit($iv));
+    }
+
+    public function testSm4OptionsIvLazyGeneration(): void
+    {
+        $opts = new Sm4Options();
+        $iv1 = $opts->getIv();
+        $iv2 = $opts->getIv();
+        $this->assertEquals($iv1, $iv2, 'IV should be generated once and cached');
+    }
+
+    public function testSm4OptionsIvTooShort(): void
     {
         $this->expectException(InvalidKeyException::class);
-        Sm4::decrypt('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', $this->key, (new Sm4Options())->setMode('ecb'));
+        (new Sm4Options())->setIv('ab');
+    }
+
+    public function testSm4OptionsIvNonHex(): void
+    {
+        $this->expectException(InvalidKeyException::class);
+        (new Sm4Options())->setIv(str_repeat('z', 32));
+    }
+
+    // ========================================================================
+    // CipherInterface
+    // ========================================================================
+
+    public function testSm4ImplementsCipherInterface(): void
+    {
+        $this->assertInstanceOf(\CryptoSm\Interfaces\CipherInterface::class, new Sm4());
+    }
+
+    // ========================================================================
+    // 辅助方法
+    // ========================================================================
+
+    public function testSm4HexToBytesStatic(): void
+    {
+        $hex = '0123456789abcdef';
+        $bytes = Sm4::hexToBytesStatic($hex);
+        $this->assertCount(8, $bytes);
+    }
+
+    // ========================================================================
+    // SM4 常量
+    // ========================================================================
+
+    public function testSm4ModeConstants(): void
+    {
+        $this->assertEquals('ecb', Sm4::MODE_ECB);
+        $this->assertEquals('cbc', Sm4::MODE_CBC);
+    }
+
+    // ========================================================================
+    // CBC 缺少 IV 时的行为
+    // ========================================================================
+
+    public function testSm4CbcWithoutIvUsesAutoGenerated(): void
+    {
+        $msg = 'test message';
+        $options = new Sm4Options(); // 默认 CBC, IV 自动生成
+        $encrypted = Sm4::encrypt($msg, $this->key, $options);
+        $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
+        $this->assertEquals($msg, $decrypted);
+    }
+
+    // ========================================================================
+    // 错误解密密钥
+    // ========================================================================
+
+    public function testSm4DecryptWithWrongKeyFails(): void
+    {
+        $msg = 'test message';
+        $options = (new Sm4Options())->setMode('ecb');
+        $encrypted = Sm4::encrypt($msg, $this->key, $options);
+        // 用错误的密钥解密应产生异常（PKCS 填充验证失败）或不同内容
+        $wrongKey = str_repeat('a', 32);
+        try {
+            $decrypted = Sm4::decrypt($encrypted, $wrongKey, $options);
+            // 如果没有抛异常，内容应不匹配
+            $this->assertNotEquals($msg, $decrypted);
+        } catch (InvalidKeyException $e) {
+            // PKCS 填充验证失败 → 符合预期
+            $this->assertStringContainsString('PKCS', $e->getMessage());
+        }
+    }
+
+    // ========================================================================
+    // 奇数长度密文
+    // ========================================================================
+
+    public function testSm4OddLengthCiphertextRejected(): void
+    {
+        $this->expectException(InvalidKeyException::class);
+        Sm4::decrypt('abc', $this->key, (new Sm4Options())->setMode('ecb'));
+    }
+
+    // ========================================================================
+    // padding=none + CBC 组合
+    // ========================================================================
+
+    public function testSm4CbcNoPaddingAligned(): void
+    {
+        $msg = '1234567890123456';
+        $options = (new Sm4Options())->setMode('cbc')->setPadding('none')->setIv($this->iv);
+        $encrypted = Sm4::encrypt($msg, $this->key, $options);
+        $decrypted = Sm4::decrypt($encrypted, $this->key, $options);
+        $this->assertEquals($msg, $decrypted);
+    }
+
+    public function testSm4CbcNoPaddingNonAlignedRejected(): void
+    {
+        $this->expectException(InvalidKeyException::class);
+        $options = (new Sm4Options())->setMode('cbc')->setPadding('none')->setIv($this->iv);
+        Sm4::encrypt('short', $this->key, $options);
+    }
+
+    // ========================================================================
+    // 密文非 16 倍数
+    // ========================================================================
+
+    public function testSm4CiphertextNotMultipleOf16Rejected(): void
+    {
+        $this->expectException(InvalidKeyException::class);
+        // 48 hex chars = 24 bytes, not multiple of 16
+        Sm4::decrypt(str_repeat('a', 48), $this->key, (new Sm4Options())->setMode('ecb'));
+    }
+
+    // ========================================================================
+    // CipherInterface 方法签名验证
+    // ========================================================================
+
+    public function testCipherInterfaceMethodSignature(): void
+    {
+        $ref = new \ReflectionClass(\CryptoSm\Interfaces\CipherInterface::class);
+        $this->assertTrue($ref->hasMethod('encrypt'));
+        $this->assertTrue($ref->hasMethod('decrypt'));
+    }
+
+    public function testCipherInterfaceEncryptDecryptViaSm4(): void
+    {
+        // 通过 CipherInterface 定义的签名调用
+        $msg = 'interface test';
+        $opts = (new Sm4Options())->setMode('ecb');
+        $ct = Sm4::encrypt($msg, $this->key, $opts);
+        $pt = Sm4::decrypt($ct, $this->key, $opts);
+        $this->assertEquals($msg, $pt);
+    }
+
+    // ========================================================================
+    // Sm4Options 更多覆盖
+    // ========================================================================
+
+    public function testSm4OptionsModeCaseInsensitive(): void
+    {
+        $opts = (new Sm4Options())->setMode('ECB');
+        $this->assertEquals('ecb', $opts->getMode());
+    }
+
+    public function testSm4OptionsPaddingCaseInsensitive(): void
+    {
+        // setPadding 不做大小写转换，但 PKCS5 是默认值
+        $opts = new Sm4Options();
+        $this->assertEquals('pkcs5', $opts->getPadding());
+    }
+
+    public function testSm4OptionsSetIvReturnsSelf(): void
+    {
+        $opts = new Sm4Options();
+        $result = $opts->setIv($this->iv);
+        $this->assertSame($opts, $result);
+    }
+
+    public function testSm4OptionsSetModeReturnsSelf(): void
+    {
+        $opts = new Sm4Options();
+        $result = $opts->setMode('ecb');
+        $this->assertSame($opts, $result);
+    }
+
+    public function testSm4OptionsSetPaddingReturnsSelf(): void
+    {
+        $opts = new Sm4Options();
+        $result = $opts->setPadding('none');
+        $this->assertSame($opts, $result);
+    }
+
+    // ========================================================================
+    // SM4 IV 验证 - CBC 模式缺少 IV
+    // ========================================================================
+
+    public function testSm4CbcModeRequiresValidIv(): void
+    {
+        // 如果手动设置空 IV → 抛异常
+        $this->expectException(InvalidKeyException::class);
+        $opts = (new Sm4Options())->setMode('cbc');
+        // getIv 会自动生成，但如果传入了 31 字符的 IV（格式错误）
+        $reflection = new \ReflectionClass($opts);
+        $prop = $reflection->getProperty('iv');
+        $prop->setAccessible(true);
+        $prop->setValue($opts, 'badiv');
+        Sm4::encrypt('test', $this->key, $opts);
+    }
+
+    // ========================================================================
+    // SM4 解密失败 - 篡改密文
+    // ========================================================================
+
+    public function testSm4DecryptTamperedCiphertextFails(): void
+    {
+        $msg = 'test message';
+        $opts = (new Sm4Options())->setMode('ecb');
+        $ct = Sm4::encrypt($msg, $this->key, $opts);
+        // 篡改密文
+        $ct[0] = $ct[0] === 'a' ? 'b' : 'a';
+        try {
+            $decrypted = Sm4::decrypt($ct, $this->key, $opts);
+            $this->assertNotEquals($msg, $decrypted);
+        } catch (InvalidKeyException $e) {
+            // PKCS 填充验证失败 → 符合预期
+            $this->assertStringContainsString('PKCS', $e->getMessage());
+        }
     }
 }

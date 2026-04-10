@@ -28,7 +28,7 @@ class Sm2VectorsTest extends TestCase
     // GM/T 0003-2012 标准曲线参数验证
     // ========================================================================
 
-    public function testCurveParameterN()
+    public function testCurveParameterN(): void
     {
         // 验证阶 n 的标准值
         $n = 'FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123';
@@ -37,28 +37,28 @@ class Sm2VectorsTest extends TestCase
         $this->assertTrue(ctype_xdigit($n));
     }
 
-    public function testCurveParameterP()
+    public function testCurveParameterP(): void
     {
         $p = 'FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFF';
         $this->assertEquals(64, strlen($p));
         $this->assertTrue(ctype_xdigit($p));
     }
 
-    public function testCurveParameterA()
+    public function testCurveParameterA(): void
     {
         $a = 'FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFC';
         $this->assertEquals(64, strlen($a));
         $this->assertTrue(ctype_xdigit($a));
     }
 
-    public function testCurveParameterB()
+    public function testCurveParameterB(): void
     {
         $b = '28E9FA9E9D9F5E344D5A9E4BCF6509A7F39789F515AB8F92DDBCBD414D940E93';
         $this->assertEquals(64, strlen($b));
         $this->assertTrue(ctype_xdigit($b));
     }
 
-    public function testGeneratorPointOnCurve()
+    public function testGeneratorPointOnCurve(): void
     {
         // 标准基点 G
         $gX = '32c4ae2c1f1981195f9904466a39c9948fe30bbff2660be1715a4589334c74c7';
@@ -76,7 +76,7 @@ class Sm2VectorsTest extends TestCase
     // GM/T 0003.1-2012 数字签名算法 - 确定性验证
     // ========================================================================
 
-    public function testSignVerifyDeterministicWithKnownKey()
+    public function testSignVerifyDeterministicWithKnownKey(): void
     {
         // 使用固定密钥对签名，验证签名长度和格式符合标准
         // SM2 签名值为 (r, s)，每个 32 字节 = 64 hex 字符
@@ -91,7 +91,7 @@ class Sm2VectorsTest extends TestCase
         $this->assertTrue(Sm2::doVerifySignature('message digest', $sig, $kp->getPublicKey()));
     }
 
-    public function testSignVerifyWithHashMode()
+    public function testSignVerifyWithHashMode(): void
     {
         // GM/T 0003.1-2012: 带 userId 的杂凑模式
         // 默认 userId = '1234567812345678'（标准默认值）
@@ -105,7 +105,7 @@ class Sm2VectorsTest extends TestCase
         $this->assertTrue(Sm2::doVerifySignature($msg, $sig, $kp->getPublicKey(), $opts));
     }
 
-    public function testSignVerifyWithCustomUserId()
+    public function testSignVerifyWithCustomUserId(): void
     {
         // GM/T 0003.1-2012: 自定义 userId
         $kp = Sm2::generateKeyPairHex();
@@ -126,14 +126,14 @@ class Sm2VectorsTest extends TestCase
         $this->assertFalse(Sm2::doVerifySignature($msg, $sig, $kp->getPublicKey(), $wrongOpts));
     }
 
-    public function testDefaultUserIdIsStandardValue()
+    public function testDefaultUserIdIsStandardValue(): void
     {
         // GM/T 0009-2012 规定默认 userId = '1234567812345678'
         $opts = new SignatureOptions();
         $this->assertEquals('1234567812345678', $opts->getUserId());
     }
 
-    public function testDerSignatureFormat()
+    public function testDerSignatureFormat(): void
     {
         // GM/T 0009-2012: DER 编码签名格式
         $kp = Sm2::generateKeyPairHex();
@@ -145,7 +145,7 @@ class Sm2VectorsTest extends TestCase
         $this->assertTrue(Sm2::doVerifySignature('test', $sig, $kp->getPublicKey(), $opts));
     }
 
-    public function testDerSignatureAutoDetection()
+    public function testDerSignatureAutoDetection(): void
     {
         // doVerifySignature 应自动检测 DER 格式签名
         $kp = Sm2::generateKeyPairHex();
@@ -161,7 +161,7 @@ class Sm2VectorsTest extends TestCase
     // GM/T 0003.4-2012 公钥加密算法 - 确定性验证
     // ========================================================================
 
-    public function testEncryptCiphertextFormatMode1()
+    public function testEncryptCiphertextFormatMode1(): void
     {
         // C1C3C2 模式（推荐模式）
         // C1: 椭圆曲线点 (64 bytes = 128 hex)
@@ -178,7 +178,7 @@ class Sm2VectorsTest extends TestCase
         $this->assertEquals($msg, Sm2::doDecrypt($ct, $kp->getPrivateKey(), $opts));
     }
 
-    public function testEncryptCiphertextFormatMode0()
+    public function testEncryptCiphertextFormatMode0(): void
     {
         // C1C2C3 模式（旧模式，兼容）
         $kp = Sm2::generateKeyPairHex();
@@ -191,7 +191,7 @@ class Sm2VectorsTest extends TestCase
         $this->assertEquals($msg, Sm2::doDecrypt($ct, $kp->getPrivateKey(), $opts));
     }
 
-    public function testEncryptProducesDifferentCiphertexts()
+    public function testEncryptProducesDifferentCiphertexts(): void
     {
         // SM2 加密使用随机数 k，相同明文应产生不同密文
         $kp = Sm2::generateKeyPairHex();
@@ -203,7 +203,7 @@ class Sm2VectorsTest extends TestCase
         $this->assertNotEquals($ct1, $ct2, 'SM2 加密应产生不可重复的密文（使用不同随机数 k）');
     }
 
-    public function testEncryptDecryptModeInteroperability()
+    public function testEncryptDecryptModeInteroperability(): void
     {
         // Mode 0 加密的密文用 Mode 0 解密，Mode 1 用 Mode 1
         // Mode 0 密文不能用 Mode 1 解密
@@ -228,7 +228,7 @@ class Sm2VectorsTest extends TestCase
     // GM/T 0003.2-2012 密钥交换 - 密钥对生成验证
     // ========================================================================
 
-    public function testKeyPairPrivateKeyRange()
+    public function testKeyPairPrivateKeyRange(): void
     {
         // 私钥 d 应在 [1, n-1] 范围内
         for ($i = 0; $i < 10; $i++) {
@@ -241,7 +241,7 @@ class Sm2VectorsTest extends TestCase
         }
     }
 
-    public function testKeyPairPublicKeyOnCurve()
+    public function testKeyPairPublicKeyOnCurve(): void
     {
         // 公钥 P = d * G 必须在曲线上
         for ($i = 0; $i < 5; $i++) {
@@ -253,7 +253,7 @@ class Sm2VectorsTest extends TestCase
         }
     }
 
-    public function testKeyPairDeterministicFromPrivateKey()
+    public function testKeyPairDeterministicFromPrivateKey(): void
     {
         // 相同私钥应生成相同公钥
         $kp1 = Sm2::generateKeyPairHex();
@@ -270,27 +270,27 @@ class Sm2VectorsTest extends TestCase
     // 私钥验证 - GM/T 0003 安全要求
     // ========================================================================
 
-    public function testPrivateKeyZeroRejected()
+    public function testPrivateKeyZeroRejected(): void
     {
         $this->expectException(InvalidKeyException::class);
         Sm2::doSignature('test', str_repeat('0', 64));
     }
 
-    public function testPrivateKeyEqualToNRejected()
+    public function testPrivateKeyEqualToNRejected(): void
     {
         $this->expectException(InvalidKeyException::class);
         $n = 'FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123';
         Sm2::doSignature('test', strtolower($n));
     }
 
-    public function testPrivateKeyLargerThanNRejected()
+    public function testPrivateKeyLargerThanNRejected(): void
     {
         $this->expectException(InvalidKeyException::class);
         $nPlus1 = gmp_strval(gmp_add(gmp_init('FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123', 16), 1), 16);
         Sm2::doSignature('test', str_pad(strtolower($nPlus1), 64, '0', STR_PAD_LEFT));
     }
 
-    public function testPrivateKeyNonHexRejected()
+    public function testPrivateKeyNonHexRejected(): void
     {
         $this->expectException(InvalidKeyException::class);
         Sm2::doSignature('test', str_repeat('g', 64));
@@ -300,14 +300,14 @@ class Sm2VectorsTest extends TestCase
     // 公钥验证 - GM/T 0003 安全要求
     // ========================================================================
 
-    public function testPublicKeyNotOnCurveRejected()
+    public function testPublicKeyNotOnCurveRejected(): void
     {
         $this->expectException(InvalidKeyException::class);
         // 随机 128 hex 字符几乎不可能在 SM2 曲线上
         Sm2::doEncrypt('test', str_repeat('1', 128));
     }
 
-    public function testPublicKeyWrongLengthRejected()
+    public function testPublicKeyWrongLengthRejected(): void
     {
         $this->expectException(InvalidKeyException::class);
         Sm2::doEncrypt('test', str_repeat('a', 64));
@@ -317,21 +317,21 @@ class Sm2VectorsTest extends TestCase
     // 密文格式验证 - GM/T 0003.4 安全要求
     // ========================================================================
 
-    public function testCiphertextTooShortRejected()
+    public function testCiphertextTooShortRejected(): void
     {
         $this->expectException(InvalidKeyException::class);
         $kp = Sm2::generateKeyPairHex();
         Sm2::doDecrypt(str_repeat('a', 128), $kp->getPrivateKey());
     }
 
-    public function testCiphertextOddLengthRejected()
+    public function testCiphertextOddLengthRejected(): void
     {
         $this->expectException(InvalidKeyException::class);
         $kp = Sm2::generateKeyPairHex();
         Sm2::doDecrypt(str_repeat('a', 191), $kp->getPrivateKey());
     }
 
-    public function testCiphertextMinimumLengthAccepted()
+    public function testCiphertextMinimumLengthAccepted(): void
     {
         // 最短密文: C1(128) + C3(64) + C2(0) = 192 hex chars (mode 1, 空明文)
         $kp = Sm2::generateKeyPairHex();
@@ -343,7 +343,7 @@ class Sm2VectorsTest extends TestCase
     // 签名验证安全检查 - GM/T 0003.1 安全要求
     // ========================================================================
 
-    public function testSignatureRZeroRejected()
+    public function testSignatureRZeroRejected(): void
     {
         // r=0 的签名应被拒绝
         $kp = Sm2::generateKeyPairHex();
@@ -351,7 +351,7 @@ class Sm2VectorsTest extends TestCase
         $this->assertFalse(Sm2::doVerifySignature('test', $sig, $kp->getPublicKey()));
     }
 
-    public function testSignatureSZeroRejected()
+    public function testSignatureSZeroRejected(): void
     {
         // s=0 的签名应被拒绝
         $kp = Sm2::generateKeyPairHex();
@@ -359,7 +359,7 @@ class Sm2VectorsTest extends TestCase
         $this->assertFalse(Sm2::doVerifySignature('test', $sig, $kp->getPublicKey()));
     }
 
-    public function testSignatureREqualNRejected()
+    public function testSignatureREqualNRejected(): void
     {
         $kp = Sm2::generateKeyPairHex();
         $n = 'FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123';
@@ -367,7 +367,7 @@ class Sm2VectorsTest extends TestCase
         $this->assertFalse(Sm2::doVerifySignature('test', $sig, $kp->getPublicKey()));
     }
 
-    public function testSignatureSEqualNRejected()
+    public function testSignatureSEqualNRejected(): void
     {
         $kp = Sm2::generateKeyPairHex();
         $n = 'FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123';
@@ -379,7 +379,7 @@ class Sm2VectorsTest extends TestCase
     // 跨模式交叉验证
     // ========================================================================
 
-    public function testSignVerifyHashVsNonHash()
+    public function testSignVerifyHashVsNonHash(): void
     {
         // hash 模式和非 hash 模式产生不同签名
         $kp = Sm2::generateKeyPairHex();
@@ -402,7 +402,7 @@ class Sm2VectorsTest extends TestCase
     // 大数据量测试
     // ========================================================================
 
-    public function testEncryptDecryptLargeData()
+    public function testEncryptDecryptLargeData(): void
     {
         $kp = Sm2::generateKeyPairHex();
         $msg = str_repeat('A', 1000);
@@ -411,7 +411,7 @@ class Sm2VectorsTest extends TestCase
         $this->assertEquals($msg, $pt);
     }
 
-    public function testSignVerifyLongMessage()
+    public function testSignVerifyLongMessage(): void
     {
         $kp = Sm2::generateKeyPairHex();
         $msg = str_repeat('Long message for signing. ', 100);
@@ -423,7 +423,7 @@ class Sm2VectorsTest extends TestCase
     // 特殊数据测试
     // ========================================================================
 
-    public function testEncryptDecryptBinaryData()
+    public function testEncryptDecryptBinaryData(): void
     {
         $kp = Sm2::generateKeyPairHex();
         $msg = chr(0x00) . chr(0x01) . chr(0x7f) . chr(0x80) . chr(0xff);
@@ -432,7 +432,7 @@ class Sm2VectorsTest extends TestCase
         $this->assertEquals($msg, $pt);
     }
 
-    public function testEncryptDecryptUnicodeData()
+    public function testEncryptDecryptUnicodeData(): void
     {
         $kp = Sm2::generateKeyPairHex();
         $msg = '中文国密测试🇨🇳🔐';
@@ -441,7 +441,7 @@ class Sm2VectorsTest extends TestCase
         $this->assertEquals($msg, $pt);
     }
 
-    public function testSignVerifyBinaryMessage()
+    public function testSignVerifyBinaryMessage(): void
     {
         $kp = Sm2::generateKeyPairHex();
         $msg = pack('C*', 0x00, 0x01, 0x7f, 0x80, 0xff, 0xfe);

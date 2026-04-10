@@ -7,8 +7,8 @@ namespace CryptoSm\SM2;
 use CryptoSm\Crypto\Asn1;
 use CryptoSm\Exception\CryptoException;
 use CryptoSm\Exception\InvalidKeyException;
-use CryptoSm\Interface\CipherInterface;
-use CryptoSm\Interface\SignerInterface;
+use CryptoSm\Interfaces\CipherInterface;
+use CryptoSm\Interfaces\SignerInterface;
 use CryptoSm\SM3\Sm3;
 use CryptoSm\Utils\Hex;
 
@@ -20,6 +20,7 @@ class Sm2 implements SignerInterface, CipherInterface
     /** @var int C1C2C3 cipher mode (legacy, for backward compatibility) */
     public const CIPHER_MODE_0 = 0;
 
+    /** @var array<string, string> SM2 curve parameters as hex strings */
     private static array $eccTable = [
         'n' => 'FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123',
         'p' => 'FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFF',
@@ -51,9 +52,14 @@ class Sm2 implements SignerInterface, CipherInterface
     public static function generateKeyPairHex(): Keypair
     {
         $pair = self::generateKeyPair();
-        return new Keypair($pair['privateKey'], $pair['publicKey']);
+        $publicKey = $pair['publicKey'];
+        if ($publicKey === null) {
+            throw new CryptoException('SM2 key generation failed: point multiplication error');
+        }
+        return new Keypair($pair['privateKey'], $publicKey);
     }
 
+    /** @return array{privateKey: string, publicKey: string|null} */
     private static function generateKeyPair(): array
     {
         $n = self::gmpParam('n');
@@ -90,11 +96,17 @@ class Sm2 implements SignerInterface, CipherInterface
         $k = bin2hex(random_bytes(32));
 
         $x1y1 = self::pointMultiply($k);
+        if ($x1y1 === null) {
+            throw new CryptoException('SM2 encryption failed: point multiplication error');
+        }
         $x1 = substr($x1y1, 0, 64);
         $y1 = substr($x1y1, 64);
         $C1 = $x1y1;
 
         $x2y2 = self::pointMultiply($publicKey, $k);
+        if ($x2y2 === null) {
+            throw new CryptoException('SM2 encryption failed: point multiplication error');
+        }
         $x2 = substr($x2y2, 0, 64);
         $y2 = substr($x2y2, 64);
 
@@ -109,19 +121,22 @@ class Sm2 implements SignerInterface, CipherInterface
                 }
                 $k = bin2hex(random_bytes(32));
                 $x1y1 = self::pointMultiply($k);
+                if ($x1y1 === null) {
+                    throw new CryptoException('SM2 encryption failed: point multiplication error');
+                }
                 $x1 = substr($x1y1, 0, 64);
                 $C1 = $x1y1;
                 $x2y2 = self::pointMultiply($publicKey, $k);
+                if ($x2y2 === null) {
+                    throw new CryptoException('SM2 encryption failed: point multiplication error');
+                }
                 $x2 = substr($x2y2, 0, 64);
                 $y2 = substr($x2y2, 64);
                 $t = self::kdf($x2 . $y2, $dataLen);
             }
         }
 
-        $C2 = '';
-        for ($i = 0; $i < $dataLen; $i++) {
-            $C2 .= chr(ord($data[$i]) ^ ord($t[$i]));
-        }
+        $C2 = $data ^ $t;
         $C2Hex = bin2hex($C2);
         $C3 = Sm3::sm3(Hex::fromHex($x2) . $data . Hex::fromHex($y2));
 
@@ -158,28 +173,26 @@ class Sm2 implements SignerInterface, CipherInterface
             $C3 = substr($data, -64);
         }
 
-        $p = self::gmpParam('p');
-        $a = self::gmpParam('a');
         $C1Point = self::parsePoint($C1);
         if ($C1Point === null || !self::isOnCurve($C1)) {
             throw new InvalidKeyException('Invalid C1');
         }
 
         $x2y2 = self::pointMultiply($C1, $privateKey);
+        if ($x2y2 === null) {
+            throw new CryptoException('SM2 decryption failed: point multiplication error');
+        }
         $x2 = substr($x2y2, 0, 64);
         $y2 = substr($x2y2, 64);
 
-        $dataLen = strlen($C2) / 2;
+        $dataLen = (int) (strlen($C2) / 2);
         $t = self::kdf($x2 . $y2, $dataLen);
         if ($dataLen > 0 && self::isAllZero($t)) {
             throw new CryptoException('KDF derived all-zero key');
         }
 
-        $M = '';
         $C2Bin = Hex::fromHex($C2);
-        for ($i = 0; $i < $dataLen; $i++) {
-            $M .= chr(ord($C2Bin[$i]) ^ ord($t[$i]));
-        }
+        $M = $C2Bin ^ $t;
 
         $u = Sm3::sm3(Hex::fromHex($x2) . $M . Hex::fromHex($y2));
         if ($u !== $C3) {
@@ -263,11 +276,18 @@ class Sm2 implements SignerInterface, CipherInterface
 
         self::validatePrivateKey($privateKey);
 
-        $e = self::calcE($data, $hash, $publicKey ?: self::pointMultiply($privateKey), $userId);
+        $e = self::calcE($data, $hash, $publicKey !== '' ? $publicKey : (self::pointMultiply($privateKey) ?? ''), $userId);
 
         $n = self::gmpParam('n');
         $d = gmp_init($privateKey, 16);
-        $dPlus1Inv = gmp_invert(gmp_add($d, gmp_init(1)), $n);
+        $dPlus1 = gmp_add($d, gmp_init(1));
+        if (gmp_cmp($dPlus1, $n) === 0) {
+            throw new CryptoException('SM2 signature failed: private key d=n-1 is not supported');
+        }
+        $dPlus1Inv = gmp_invert($dPlus1, $n);
+        if ($dPlus1Inv === false) {
+            throw new CryptoException('SM2 signature failed: modular inverse computation error');
+        }
 
         $maxRetries = 100;
         $retry = 0;
@@ -276,6 +296,9 @@ class Sm2 implements SignerInterface, CipherInterface
         do {
             $k = gmp_random_range(gmp_init(1), gmp_sub($n, gmp_init(1)));
             $x1y1 = self::pointMultiply(gmp_strval($k, 16));
+            if ($x1y1 === null) {
+                continue;
+            }
             $x1Dec = gmp_init(substr($x1y1, 0, 64), 16);
 
             if (gmp_cmp($x1Dec, $n) >= 0 || gmp_cmp($x1Dec, 0) === 0) {
@@ -442,7 +465,7 @@ class Sm2 implements SignerInterface, CipherInterface
 
         for ($i = strlen($factorBin) - 1; $i >= 0; $i--) {
             if ($factorBin[$i] === '1') {
-                if ($resultX === null) {
+                if ($resultX === null || $resultY === null) {
                     $resultX = $currentX;
                     $resultY = $currentY;
                 } else {
@@ -459,7 +482,7 @@ class Sm2 implements SignerInterface, CipherInterface
             $currentY = $temp['y'];
         }
 
-        if ($resultX === null) {
+        if ($resultX === null || $resultY === null) {
             return str_repeat('0', 128);
         }
 
@@ -467,6 +490,9 @@ class Sm2 implements SignerInterface, CipherInterface
             str_pad(gmp_strval($resultY, 16), 64, '0', STR_PAD_LEFT);
     }
 
+    /**
+     * @return array{x: \GMP, y: \GMP}|null
+     */
     private static function pointAdd(\GMP $x1, \GMP $y1, \GMP $x2, \GMP $y2, \GMP $p, \GMP $a): ?array
     {
         if (gmp_cmp($x1, $x2) === 0) {
@@ -476,19 +502,27 @@ class Sm2 implements SignerInterface, CipherInterface
             return null;
         }
 
-        $lambda = gmp_mod(gmp_mul(gmp_sub($y2, $y1), gmp_invert(gmp_sub($x2, $x1), $p)), $p);
+        $inv = gmp_invert(gmp_sub($x2, $x1), $p);
+        if ($inv === false) {
+            return null;
+        }
+        $lambda = gmp_mod(gmp_mul(gmp_sub($y2, $y1), $inv), $p);
         $x3 = gmp_mod(gmp_sub(gmp_sub(gmp_pow($lambda, 2), $x1), $x2), $p);
         $y3 = gmp_mod(gmp_sub(gmp_mul($lambda, gmp_sub($x1, $x3)), $y1), $p);
 
         return ['x' => $x3, 'y' => $y3];
     }
 
+    /**
+     * @return array{x: \GMP, y: \GMP}
+     */
     private static function pointDouble(\GMP $x, \GMP $y, \GMP $p, \GMP $a): array
     {
+        $yInv = gmp_invert(gmp_mul(gmp_init(2), $y), $p);
         $lambda = gmp_mod(
             gmp_mul(
                 gmp_add(gmp_mul(gmp_init(3), gmp_pow($x, 2)), $a),
-                gmp_invert(gmp_mul(gmp_init(2), $y), $p)
+                $yInv === false ? gmp_init(0) : $yInv
             ),
             $p
         );
@@ -534,6 +568,9 @@ class Sm2 implements SignerInterface, CipherInterface
         return gmp_cmp($left, $right) === 0;
     }
 
+    /**
+     * @return array{x: \GMP, y: \GMP}|null
+     */
     private static function parsePoint(string $hex): ?array
     {
         if (strlen($hex) !== 128) {

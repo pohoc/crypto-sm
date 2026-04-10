@@ -24,7 +24,7 @@ class Sm3VectorsTest extends TestCase
      * 标准测试向量 1: SM3("abc")
      * GM/T 0004-2012 附录 A
      */
-    public function testVectorAbc()
+    public function testVectorAbc(): void
     {
         $this->assertEquals(
             '66c7f0f462eeedd9d1f2d46bdc10e4e24167c4875cf2f7a2297da02b8f4ba8e0',
@@ -36,7 +36,7 @@ class Sm3VectorsTest extends TestCase
      * 标准测试向量 2: SM3(str_repeat('a', 1000000))
      * GM/T 0004-2012 附录 A
      */
-    public function testVectorMillionA()
+    public function testVectorMillionA(): void
     {
         $input = str_repeat('a', 1_000_000);
         $this->assertEquals(
@@ -49,7 +49,7 @@ class Sm3VectorsTest extends TestCase
      * SM3("") 空字符串
      * 来自通用 SM3 参考实现验证
      */
-    public function testVectorEmptyString()
+    public function testVectorEmptyString(): void
     {
         $this->assertEquals(
             '1ab21d8355cfa17f8e61194831e81a8f22bec8c728fefb747ed035eb5082aa2b',
@@ -64,7 +64,7 @@ class Sm3VectorsTest extends TestCase
     /**
      * RFC 8961 附录: SM3(0x00)
      */
-    public function testVectorSingleZeroByte()
+    public function testVectorSingleZeroByte(): void
     {
         $result = Sm3::sm3("\x00");
         $this->assertEquals(64, strlen($result));
@@ -76,7 +76,7 @@ class Sm3VectorsTest extends TestCase
     /**
      * RFC 8961 附录: SM3(0x01 0x02 0x03 0x04)
      */
-    public function testVector0x01020304()
+    public function testVector0x01020304(): void
     {
         $result = Sm3::sm3("\x01\x02\x03\x04");
         $this->assertEquals(64, strlen($result));
@@ -89,7 +89,7 @@ class Sm3VectorsTest extends TestCase
      * GM/T 0004-2012 附录 A.2: SM3("abcd" × 16)
      * 即 64 字节输入: 61626364 重复 16 次
      */
-    public function testVectorAbcdRepeated16()
+    public function testVectorAbcdRepeated16(): void
     {
         $input = str_repeat('abcd', 16);
         $this->assertEquals(
@@ -105,7 +105,7 @@ class Sm3VectorsTest extends TestCase
     /**
      * 恰好 1 个分块 (64 字节)
      */
-    public function testExactlyOneBlock()
+    public function testExactlyOneBlock(): void
     {
         $input = str_repeat('a', 64);
         $hash = Sm3::sm3($input);
@@ -116,7 +116,7 @@ class Sm3VectorsTest extends TestCase
     /**
      * 恰好 2 个分块 (128 字节)
      */
-    public function testExactlyTwoBlocks()
+    public function testExactlyTwoBlocks(): void
     {
         $input = str_repeat('b', 128);
         $hash = Sm3::sm3($input);
@@ -127,7 +127,7 @@ class Sm3VectorsTest extends TestCase
      * 55 字节 - 恰好在填充边界（长度字段前）
      * SM3 填充: 64*N 中，如果剩余 < 56 字节则长度字段可放在同一块
      */
-    public function testBoundary55Bytes()
+    public function testBoundary55Bytes(): void
     {
         $input = str_repeat('c', 55);
         $hash = Sm3::sm3($input);
@@ -137,7 +137,7 @@ class Sm3VectorsTest extends TestCase
     /**
      * 56 字节 - 填充后需要额外的块
      */
-    public function testBoundary56Bytes()
+    public function testBoundary56Bytes(): void
     {
         $input = str_repeat('d', 56);
         $hash = Sm3::sm3($input);
@@ -147,7 +147,7 @@ class Sm3VectorsTest extends TestCase
     /**
      * 63 字节 - 接近一个完整块
      */
-    public function testBoundary63Bytes()
+    public function testBoundary63Bytes(): void
     {
         $input = str_repeat('e', 63);
         $hash = Sm3::sm3($input);
@@ -157,7 +157,7 @@ class Sm3VectorsTest extends TestCase
     /**
      * 65 字节 - 跨越一个块
      */
-    public function testBoundary65Bytes()
+    public function testBoundary65Bytes(): void
     {
         $input = str_repeat('f', 65);
         $hash = Sm3::sm3($input);
@@ -168,7 +168,7 @@ class Sm3VectorsTest extends TestCase
     // 确定性验证 - 相同输入必须产生相同输出
     // ========================================================================
 
-    public function testDeterminism()
+    public function testDeterminism(): void
     {
         $messages = [
             '',
@@ -192,7 +192,7 @@ class Sm3VectorsTest extends TestCase
     // 雪崩效应测试 - 微小输入变化应导致大幅输出变化
     // ========================================================================
 
-    public function testAvalancheEffect()
+    public function testAvalancheEffect(): void
     {
         $h1 = Sm3::sm3('message1');
         $h2 = Sm3::sm3('message2');
@@ -215,14 +215,14 @@ class Sm3VectorsTest extends TestCase
     // HashInterface 实例方法验证
     // ========================================================================
 
-    public function testInstanceHashMethod()
+    public function testInstanceHashMethod(): void
     {
         $sm3 = new Sm3();
         $msg = 'interface test';
         $this->assertEquals(Sm3::sm3($msg), $sm3->hash($msg));
     }
 
-    public function testStaticHashMethod()
+    public function testStaticHashMethod(): void
     {
         $msg = 'static hash test';
         $this->assertEquals(Sm3::sm3($msg), Sm3::hashStatic($msg));
@@ -232,7 +232,7 @@ class Sm3VectorsTest extends TestCase
     // 大数据性能验证
     // ========================================================================
 
-    public function testLargeInputConsistency()
+    public function testLargeInputConsistency(): void
     {
         $input = str_repeat('A', 1_000_000);
         $h1 = Sm3::sm3($input);

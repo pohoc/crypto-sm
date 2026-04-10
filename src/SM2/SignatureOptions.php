@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace CryptoSm\SM2;
 
+use CryptoSm\Exception\InvalidKeyException;
+
 /**
  * Options for SM2 signature operations.
  */
@@ -73,9 +75,13 @@ class SignatureOptions
      *
      * @param  string $publicKey 128-character hex string (uncompressed, without "04" prefix)
      * @return self
+     * @throws InvalidKeyException If public key format is invalid
      */
     public function setPublicKey(string $publicKey): self
     {
+        if ($publicKey !== '' && !preg_match('/^[0-9a-fA-F]{128}$/', $publicKey)) {
+            throw new InvalidKeyException('Public key must be 128 hex chars (uncompressed)');
+        }
         $this->publicKey = $publicKey;
         return $this;
     }

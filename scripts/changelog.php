@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 /**
  * 自动从 git tag 和 commit 生成 CHANGELOG.md
  *
@@ -170,6 +172,11 @@ function groupCommits(array $commits, array $sections): array
 
         if ($type === 'style') {
             continue; // 忽略纯格式变更
+        }
+
+        // 忽略自动生成的变更日志提交
+        if ($type === 'docs' && preg_match('/更新变更日志/', $text)) {
+            continue;
         }
 
         if (!isset($grouped[$sectionName])) {
