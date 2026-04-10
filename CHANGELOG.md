@@ -1,23 +1,11 @@
 # 变更日志
 
+本文件由脚本自动生成，基于 git tag 和 commit 记录。
+
 ## [v0.1.1] - 2026-04-10
 
-### 性能优化
-- SM3: 优先使用 `openssl_digest('sm3')` C 原生实现，性能提升 100-300 倍
-- SM3: 纯 PHP 回退路径内联优化，性能提升 20-30%
-- SM2: pointMultiply 改用 4-bit 窗口法，减少点加次数约 50%
-- SM2: 基点预计算表，避免签名时重复计算 i*G
-- SM2: 新增 pointMultiplyInternal 返回 GMP 对象，消除 str↔GMP 反复转换
-- SM2: 缓存 gmp_init(2)/gmp_init(3) 常量，避免循环内重复创建
-
-### 修复
-- 修复 phpstan level 8 静态分析错误
-- 修复 PHP-CS-Fixer 代码风格问题
-
-### 新增
-- SM3: OpenSSL 与纯 PHP 路径一致性测试、纯 PHP 标准向量测试
-- SM2: 窗口法点乘一致性、签名验签、hash 模式、加解密往返验证测试
-- scripts/benchmark.php 性能基准测试脚本
+### 变更
+- SM3 OpenSSL 加速 + SM2 窗口法点乘优化 (v0.1.1)
 
 ## [v0.1.0] - 2026-04-10
 
