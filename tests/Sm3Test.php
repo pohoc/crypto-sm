@@ -239,8 +239,8 @@ class Sm3Test extends TestCase
         $inputs = ['', 'a', 'abc', str_repeat('x', 100), str_repeat('y', 1000)];
         foreach ($inputs as $input) {
             $result = Sm3::sm3($input);
-            $this->assertEquals(64, strlen($result), "Failed for input length: " . strlen($input));
-            $this->assertTrue(ctype_xdigit($result), "Output not hex for input length: " . strlen($input));
+            $this->assertEquals(64, strlen($result), 'Failed for input length: ' . strlen($input));
+            $this->assertTrue(ctype_xdigit($result), 'Output not hex for input length: ' . strlen($input));
         }
     }
 
@@ -378,7 +378,7 @@ class Sm3Test extends TestCase
             '' => '1ab21d8355cfa17f8e61194831e81a8f22bec8c728fefb747ed035eb5082aa2b',
         ];
         foreach ($testCases as $input => $expected) {
-            $this->assertEquals($expected, Sm3::sm3($input), "SM3 mismatch for input length " . strlen($input));
+            $this->assertEquals($expected, Sm3::sm3($input), 'SM3 mismatch for input length ' . strlen($input));
         }
     }
 
@@ -392,5 +392,63 @@ class Sm3Test extends TestCase
         $this->assertTrue($ref->hasMethod('hash'));
         $method = $ref->getMethod('hash');
         $this->assertTrue($method->isPublic());
+    }
+
+    // ========================================================================
+    // OpenSSL 路径 vs 纯 PHP 路径一致性验证
+    // ========================================================================
+
+    public function testOpenSslAndPurePhpProduceSameResult(): void
+    {
+        if (!function_exists('openssl_digest') || !in_array('sm3', openssl_get_md_methods(), true)) {
+            $this->markTestSkipped('OpenSSL SM3 not available');
+        }
+
+        $ref = new \ReflectionClass(Sm3::class);
+        $method = $ref->getMethod('computeHashPure');
+        $method->setAccessible(true);
+
+        $testCases = [
+            '',
+            'a',
+            'abc',
+            'hello world',
+            '你好世界',
+            str_repeat('x', 55),   // 填充边界
+            str_repeat('y', 56),   // 填充边界
+            str_repeat('z', 64),   // 恰好一个块
+            str_repeat('a', 128),  // 两个块
+            str_repeat('b', 1000), // 多块
+            chr(0) . chr(128) . chr(255), // 二进制
+        ];
+
+        foreach ($testCases as $input) {
+            $openSslResult = Sm3::sm3($input);
+            $purePhpResult = $method->invoke(null, $input);
+            $this->assertEquals(
+                $openSslResult,
+                $purePhpResult,
+                'OpenSSL and pure PHP SM3 differ for input length ' . strlen($input)
+            );
+        }
+    }
+
+    public function testPurePhpMatchesStandardVectors(): void
+    {
+        $ref = new \ReflectionClass(Sm3::class);
+        $method = $ref->getMethod('computeHashPure');
+        $method->setAccessible(true);
+
+        // GM/T 0004-2012 标准向量
+        $this->assertEquals(
+            '66c7f0f462eeedd9d1f2d46bdc10e4e24167c4875cf2f7a2297da02b8f4ba8e0',
+            $method->invoke(null, 'abc'),
+            'Pure PHP SM3("abc") mismatch'
+        );
+        $this->assertEquals(
+            '1ab21d8355cfa17f8e61194831e81a8f22bec8c728fefb747ed035eb5082aa2b',
+            $method->invoke(null, ''),
+            'Pure PHP SM3("") mismatch'
+        );
     }
 }

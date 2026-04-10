@@ -73,7 +73,7 @@ class SignatureOptions
      * Required when hash=true. If not set, the public key will be
      * derived from the private key during signing.
      *
-     * @param  string $publicKey 128-character hex string (uncompressed, without "04" prefix)
+     * @param  string              $publicKey 128-character hex string (uncompressed, without "04" prefix)
      * @return self
      * @throws InvalidKeyException If public key format is invalid
      */

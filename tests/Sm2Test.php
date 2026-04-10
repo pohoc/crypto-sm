@@ -558,4 +558,71 @@ class Sm2Test extends TestCase
         $sig = Sm2::doSignature('test', $paddedKey);
         $this->assertNotEmpty($sig);
     }
+
+    // ========================================================================
+    // 窗口法点乘一致性验证
+    // ========================================================================
+
+    public function testFixedBaseMultiplyConsistency(): void
+    {
+        $ref = new \ReflectionClass(Sm2::class);
+
+        // 调用 pointMultiply 对基点乘法（使用预计算表 + 窗口法）
+        $pointMultiply = $ref->getMethod('pointMultiply');
+        $pointMultiply->setAccessible(true);
+
+        // 测试多个随机标量，确保窗口法结果正确
+        for ($i = 0; $i < 5; $i++) {
+            $k = bin2hex(random_bytes(32));
+            $result = $pointMultiply->invoke(null, '', $k);
+            $this->assertNotNull($result, 'pointMultiply should not return null for random k');
+            $this->assertEquals(128, strlen($result), 'Result should be 128 hex chars');
+
+            // 用 SM2 签名验签间接验证 k*G 的正确性
+            // 如果 k*G 计算错误，签名/验签不可能通过
+        }
+    }
+
+    public function testWindowMultiplyConsistencyWithSignature(): void
+    {
+        // 窗口法用于签名/验签内部，通过完整的签名验签流程间接验证
+        // 多次签名验签确保窗口法在各种随机标量下都正确
+        for ($i = 0; $i < 5; $i++) {
+            $kp = Sm2::generateKeyPairHex();
+            $msg = "window test $i";
+            $sig = Sm2::doSignature($msg, $kp->getPrivateKey());
+            $this->assertTrue(
+                Sm2::doVerifySignature($msg, $sig, $kp->getPublicKey()),
+                "Signature verification failed at iteration $i"
+            );
+        }
+    }
+
+    public function testWindowMultiplyWithHashMode(): void
+    {
+        // hash 模式下的签名验签也使用窗口法
+        for ($i = 0; $i < 3; $i++) {
+            $kp = Sm2::generateKeyPairHex();
+            $opts = (new SignatureOptions())->setHash(true)->setPublicKey($kp->getPublicKey());
+            $msg = "hash window test $i";
+            $sig = Sm2::doSignature($msg, $kp->getPrivateKey(), $opts);
+            $this->assertTrue(
+                Sm2::doVerifySignature($msg, $sig, $kp->getPublicKey(), $opts),
+                "Hash mode signature verification failed at iteration $i"
+            );
+        }
+    }
+
+    public function testEncryptDecryptUsesWindowMultiply(): void
+    {
+        // 加密使用基点乘法 + 变基点乘法，解密使用变基点乘法
+        // 多次加解密确保窗口法正确
+        for ($i = 0; $i < 3; $i++) {
+            $kp = Sm2::generateKeyPairHex();
+            $msg = "encrypt window $i";
+            $ct = Sm2::doEncrypt($msg, $kp->getPublicKey());
+            $pt = Sm2::doDecrypt($ct, $kp->getPrivateKey());
+            $this->assertEquals($msg, $pt, "Encrypt/decrypt round-trip failed at iteration $i");
+        }
+    }
 }

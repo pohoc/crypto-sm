@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace CryptoSm\Tests;
 
-use CryptoSm\Exception\CryptoException;
 use CryptoSm\Exception\InvalidKeyException;
 use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
