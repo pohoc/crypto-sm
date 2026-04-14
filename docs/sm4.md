@@ -4,18 +4,22 @@
 
 SM4 是中国分组密码算法标准 (GM/T 0002-2012)，是一种 128 位分组密码，密钥长度也为 128 位。
 
+本实现特性：
+- **6 种加密模式**：ECB、CBC、CFB、OFB、CTR、GCM
+- **5 种填充模式**：PKCS5/PKCS7、Zero、ISO 10126、ANSI X9.23、None
+- **OpenSSL 加速**：ECB/CBC/CFB/OFB/CTR 使用 OpenSSL C 原生实现
+- **GCM 纯 PHP 回退**：当 OpenSSL 不支持 SM4-GCM 时自动使用 `GcmPure`
+
 ## 基本用法
 
-### ECB 模式（默认 → 已改为 CBC）
-
-> **注意**: 从当前版本起，默认加密模式已从 ECB 改为 CBC。ECB 模式不安全，仅建议在兼容旧系统时使用。
+### CBC 模式（默认，推荐）
 
 ```php
 use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
 
-$key = '0123456789abcdeffedcba9876543210';
-$iv = 'fedcba9876543210fedcba9876543210';
+$key = '0123456789abcdeffedcba9876543210'; // 32 字符 hex
+$iv = 'fedcba9876543210fedcba9876543210';  // 32 字符 hex
 $options = (new Sm4Options())
     ->setMode('cbc')
     ->setIv($iv);
@@ -24,11 +28,13 @@ $ciphertext = Sm4::encrypt($data, $key, $options);
 $plaintext = Sm4::decrypt($ciphertext, $key, $options);
 ```
 
-## 密码模式
+> **注意**：默认模式已从 ECB 改为 CBC。ECB 模式不安全，仅建议在兼容旧系统时使用。
+
+## 加密模式
 
 ### ECB 模式（不推荐）
 
-电子密码本模式 - 每个分组独立加密。**注意：ECB 模式不安全，相同明文会产生相同密文，仅建议在兼容旧系统时使用。**
+电子密码本模式 — 每个分组独立加密。**注意：ECB 模式不安全，相同明文会产生相同密文。**
 
 ```php
 use CryptoSm\SM4\Sm4;
@@ -41,16 +47,16 @@ $ciphertext = Sm4::encrypt($data, $key, $options);
 $plaintext = Sm4::decrypt($ciphertext, $key, $options);
 ```
 
-### CBC 模式
+### CBC 模式（推荐）
 
-密码块链接模式 - 每个分组与前一个密文分组进行 XOR 操作。
+密码块链接模式 — 每个分组与前一个密文分组进行 XOR 操作。
 
 ```php
 use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
 
 $key = '0123456789abcdeffedcba9876543210';
-$iv = 'fedcba9876543210fedcba9876543210'; // 32 十六进制字符 IV
+$iv = 'fedcba9876543210fedcba9876543210';
 $options = (new Sm4Options())
     ->setMode('cbc')
     ->setIv($iv);
@@ -59,59 +65,188 @@ $ciphertext = Sm4::encrypt($data, $key, $options);
 $plaintext = Sm4::decrypt($ciphertext, $key, $options);
 ```
 
+### CFB 模式
+
+密码反馈模式 — 将分组密码转换为流密码，支持不等长数据处理。
+
+```php
+use CryptoSm\SM4\Sm4;
+use CryptoSm\SM4\Sm4Options;
+
+$key = '0123456789abcdeffedcba9876543210';
+$iv = 'fedcba9876543210fedcba9876543210';
+$options = (new Sm4Options())
+    ->setMode('cfb')
+    ->setIv($iv);
+
+$ciphertext = Sm4::encrypt($data, $key, $options);
+$plaintext = Sm4::decrypt($ciphertext, $key, $options);
+```
+
+### OFB 模式
+
+输出反馈模式 — 生成密钥流与明文 XOR，适合噪声信道传输。
+
+```php
+use CryptoSm\SM4\Sm4;
+use CryptoSm\SM4\Sm4Options;
+
+$key = '0123456789abcdeffedcba9876543210';
+$iv = 'fedcba9876543210fedcba9876543210';
+$options = (new Sm4Options())
+    ->setMode('ofb')
+    ->setIv($iv);
+
+$ciphertext = Sm4::encrypt($data, $key, $options);
+$plaintext = Sm4::decrypt($ciphertext, $key, $options);
+```
+
+### CTR 模式
+
+计数器模式 — 将分组密码转换为流密码，支持并行加密。
+
+```php
+use CryptoSm\SM4\Sm4;
+use CryptoSm\SM4\Sm4Options;
+
+$key = '0123456789abcdeffedcba9876543210';
+$iv = 'fedcba9876543210fedcba9876543210';
+$options = (new Sm4Options())
+    ->setMode('ctr')
+    ->setIv($iv);
+
+$ciphertext = Sm4::encrypt($data, $key, $options);
+$plaintext = Sm4::decrypt($ciphertext, $key, $options);
+```
+
+### GCM 模式
+
+Galois/Counter 模式 — 提供加密 + 认证（AEAD），是当前最推荐的加密模式。
+
+```php
+use CryptoSm\SM4\Sm4;
+use CryptoSm\SM4\Sm4Options;
+
+$key = '0123456789abcdeffedcba9876543210';
+$iv = '0123456789abcdef';               // 12 字节 IV（推荐）
+$options = (new Sm4Options())
+    ->setMode('gcm')
+    ->setIv($iv);
+
+$ciphertext = Sm4::encrypt($data, $key, $options);
+$plaintext = Sm4::decrypt($ciphertext, $key, $options);
+```
+
+#### GCM + 附加认证数据（AAD）
+
+GCM 支持附加认证数据（AAD），可以保护不被加密但需要完整性验证的数据：
+
+```php
+use CryptoSm\SM4\Sm4;
+use CryptoSm\SM4\Sm4Options;
+
+$key = '0123456789abcdeffedcba9876543210';
+$iv = '0123456789abcdef';
+$aad = 'associated_data_to_protect';
+
+$options = (new Sm4Options())
+    ->setMode('gcm')
+    ->setIv($iv)
+    ->setAad($aad);
+
+$ciphertext = Sm4::encrypt($data, $key, $options);
+$plaintext = Sm4::decrypt($ciphertext, $key, $options);
+```
+
+#### GCM 标签长度
+
+GCM 认证标签长度默认 16 字节，可自定义（4/8/12/13/14/15/16）：
+
+```php
+$options = (new Sm4Options())
+    ->setMode('gcm')
+    ->setIv($iv)
+    ->setTagLength(12); // 12 字节标签
+```
+
+> **注意**：GCM 密文格式为 `ciphertext_hex + tag_hex`。认证标签验证失败会抛出 `CryptoException`。
+
 ## 填充模式
 
 ### PKCS5/PKCS7 填充（默认）
 
+最常用的填充方式，当数据长度不是 16 的倍数时自动填充：
+
 ```php
 use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
 
-$key = '0123456789abcdeffedcba9876543210';
 $options = (new Sm4Options())->setPadding('pkcs5');
-
 $ciphertext = Sm4::encrypt($data, $key, $options);
 $plaintext = Sm4::decrypt($ciphertext, $key, $options);
+```
+
+### Zero 填充
+
+用零字节填充到块大小：
+
+```php
+$options = (new Sm4Options())->setPadding('zero');
+```
+
+### ISO 10126 填充
+
+随机字节填充（除最后一个字节为填充长度），提供一定的随机性：
+
+```php
+$options = (new Sm4Options())->setPadding('iso10126');
+```
+
+### ANSI X9.23 填充
+
+零字节填充（除最后一个字节为填充长度）：
+
+```php
+$options = (new Sm4Options())->setPadding('ansix923');
 ```
 
 ### 无填充
 
+数据长度必须是 16 的倍数：
+
 ```php
-use CryptoSm\SM4\Sm4;
+$data = str_pad('', 16, 'x'); // 必须是 16 的倍数
+$options = (new Sm4Options())->setPadding('none');
+```
+
+## 使用 SmCrypto 门面类
+
+```php
+use CryptoSm\SmCrypto;
 use CryptoSm\SM4\Sm4Options;
 
 $key = '0123456789abcdeffedcba9876543210';
-$data = str_pad('', 16, 'x'); // 必须是 16 的倍数
-$options = (new Sm4Options())->setPadding('none');
 
-$ciphertext = Sm4::encrypt($data, $key, $options);
-$plaintext = Sm4::decrypt($ciphertext, $key, $options);
+// CBC 加密（默认）
+$ciphertext = SmCrypto::sm4Encrypt('Hello World', $key);
+$plaintext = SmCrypto::sm4Decrypt($ciphertext, $key);
+
+// GCM 加密
+$options = (new Sm4Options())->setMode(Sm4::MODE_GCM)->setIv('0123456789abcdef');
+$ciphertext = SmCrypto::sm4Encrypt('Hello World', $key, $options);
+$plaintext = SmCrypto::sm4Decrypt($ciphertext, $key, $options);
+
+// 自定义选项
+$options = (new Sm4Options())
+    ->setMode(Sm4::MODE_CBC)
+    ->setIv('fedcba9876543210fedcba9876543210')
+    ->setPadding('pkcs5');
+$ciphertext = SmCrypto::sm4Encrypt('Hello World', $key, $options);
 ```
 
 ## 完整示例
 
-### 简单加密
-
-```php
-<?php
-
-declare(strict_types=1);
-
-require_once 'vendor/autoload.php';
-
-use CryptoSm\SM4\Sm4;
-
-$key = '0123456789abcdeffedcba9876543210';
-$plaintext = 'Hello World';
-
-$ciphertext = Sm4::encrypt($plaintext, $key);
-echo "密文: " . bin2hex($ciphertext) . "\n";
-
-$decrypted = Sm4::decrypt($ciphertext, $key);
-echo "解密: $decrypted\n";
-```
-
-### CBC 模式带 IV
+### CBC 模式
 
 ```php
 <?php
@@ -132,13 +267,13 @@ $options = (new Sm4Options())
     ->setIv($iv);
 
 $ciphertext = Sm4::encrypt($plaintext, $key, $options);
-echo "密文: " . bin2hex($ciphertext) . "\n";
+echo "密文: $ciphertext\n";
 
 $decrypted = Sm4::decrypt($ciphertext, $key, $options);
 echo "解密: $decrypted\n";
 ```
 
-### 加密长数据
+### GCM 模式
 
 ```php
 <?php
@@ -151,25 +286,39 @@ use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
 
 $key = '0123456789abcdeffedcba9876543210';
-$plaintext = str_repeat('A', 1000); // 长数据
+$iv = '0123456789abcdef';
+$plaintext = 'Hello World';
 
-$options = (new Sm4Options())->setMode('cbc')->setIv('fedcba9876543210fedcba9876543210');
+$options = (new Sm4Options())
+    ->setMode('gcm')
+    ->setIv($iv)
+    ->setAad('additional data');
+
 $ciphertext = Sm4::encrypt($plaintext, $key, $options);
-$decrypted = Sm4::decrypt($ciphertext, $key, $options);
+echo "密文: $ciphertext\n";
 
-echo "原始长度: " . strlen($plaintext) . "\n";
-echo "解密后长度: " . strlen($decrypted) . "\n";
-echo "匹配: " . ($plaintext === $decrypted ? '是' : '否') . "\n";
+$decrypted = Sm4::decrypt($ciphertext, $key, $options);
+echo "解密: $decrypted\n";
+
+// 篡改密文会导致认证失败
+try {
+    $tampered = substr_replace($ciphertext, "\xff", 0, 1);
+    Sm4::decrypt($tampered, $key, $options);
+} catch (\CryptoSm\Exception\CryptoException $e) {
+    echo "认证失败: " . $e->getMessage() . "\n";
+}
 ```
 
 ## 密钥和 IV 要求
 
-| 模式 | 密钥长度 | IV 长度 | 状态 |
-|------|----------|---------|------|
-| CBC（推荐） | 32 十六进制字符 | 32 十六进制字符 | 已实现 |
-| ECB（不推荐） | 32 十六进制字符 | 无 | 已实现 |
-| CFB | 32 十六进制字符 | 32 十六进制字符 | 计划中 |
-| OFB | 32 十六进制字符 | 32 十六进制字符 | 计划中 |
+| 模式 | 密钥长度 | IV 长度 | 推荐 | 说明 |
+|------|----------|---------|------|------|
+| **GCM** | 32 hex | 24 hex (12B) | ⭐ 推荐 | AEAD 加密+认证 |
+| **CBC** | 32 hex | 32 hex (16B) | ✅ 可用 | 需配合HMAC保证完整性 |
+| **CTR** | 32 hex | 32 hex (16B) | ✅ 可用 | 流密码模式 |
+| **CFB** | 32 hex | 32 hex (16B) | ✅ 可用 | 流密码模式 |
+| **OFB** | 32 hex | 32 hex (16B) | ✅ 可用 | 流密码模式 |
+| **ECB** | 32 hex | 无 | ❌ 不推荐 | 不安全 |
 
 ## 技术细节
 
@@ -177,28 +326,32 @@ echo "匹配: " . ($plaintext === $decrypted ? '是' : '否') . "\n";
 - **密钥长度**: 128 位（16 字节）
 - **轮数**: 32 轮
 - **标准**: GM/T 0002-2012
+- **GCM 实现**: OpenSSL SM4-GCM 可用时自动使用，否则回退到纯 PHP（GcmPure）
+- **GCM 纯 PHP**: 使用 OpenSSL SM4-ECB 做块加密 + 8-bit 查表法 GHASH
 
 ## 安全注意事项
 
-1. **推荐使用 CBC 模式**（当前默认），ECB 模式不安全，相同明文会产生相同密文
-2. 在 CBC 模式下，每次加密操作都应使用随机的 IV
-3. 安全存储密钥（使用环境变量或安全的密钥管理）
-4. SM4 在中国是政府强制使用的，但已经公开发布
+1. **推荐使用 GCM 模式** — 提供加密 + 认证（AEAD），是目前最安全的选择
+2. **CBC 模式**需配合 HMAC 等机制保证完整性
+3. **ECB 模式不安全**，相同明文产生相同密文，仅用于兼容旧系统
+4. 在 CBC/CFB/OFB/CTR 模式下，每次加密操作都应使用随机的 IV
+5. GCM 模式的 IV 绝不能重复使用同一密钥加密不同数据
+6. 安全存储密钥（使用环境变量或安全的密钥管理）
 
 ## 错误处理
 
 ```php
 use CryptoSm\SM4\Sm4;
+use CryptoSm\Exception\CryptoException;
+use CryptoSm\Exception\InvalidKeyException;
 
 try {
-    $ciphertext = Sm4::encrypt($data, $key);
-    $plaintext = Sm4::decrypt($ciphertext, $wrongKey);
-    // 会产生乱码，不会抛出异常
-    
-    // 对于 CBC 模式，错误的密钥会因填充验证失败而抛出异常
-    $options = (new Sm4Options())->setMode('cbc')->setIv($iv);
-    $plaintext = Sm4::decrypt($ciphertext, $wrongKey, $options);
-} catch (Exception $e) {
-    echo "错误: " . $e->getMessage();
+    $ciphertext = Sm4::encrypt($data, $key, $options);
+    $plaintext = Sm4::decrypt($ciphertext, $key, $options);
+} catch (InvalidKeyException $e) {
+    echo "密钥无效: " . $e->getMessage();
+} catch (CryptoException $e) {
+    // GCM 认证失败也会抛出 CryptoException
+    echo "加密/解密错误: " . $e->getMessage();
 }
 ```

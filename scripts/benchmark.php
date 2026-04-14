@@ -13,8 +13,12 @@ declare(strict_types=1);
 
 require __DIR__ . '/../vendor/autoload.php';
 
+use CryptoSm\SM2\KeyExchange;
+use CryptoSm\SM2\Pem;
 use CryptoSm\SM2\SignatureOptions;
 use CryptoSm\SM2\Sm2;
+use CryptoSm\SM2\Sm2CipherOptions;
+use CryptoSm\SM3\HmacSm3;
 use CryptoSm\SM3\Sm3;
 use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
@@ -29,6 +33,10 @@ const SM4_ITERATIONS = 1000;       // SM4 迭代次数
 const SM2_SIGN_ITERATIONS = 50;    // SM2 签名迭代次数
 const SM2_ENCRYPT_ITERATIONS = 50; // SM2 加密迭代次数
 const SM2_KEYGEN_ITERATIONS = 20;  // SM2 密钥生成迭代次数
+const HMAC_ITERATIONS = 1000;      // HMAC-SM3 迭代次数
+const PEM_ITERATIONS = 100;        // PEM 迭代次数
+const KEY_EXCHANGE_ITERATIONS = 20; // 密钥交换迭代次数
+const GCM_ITERATIONS = 200;        // GCM 迭代次数
 
 const DATA_SIZES = [16, 64, 256, 1024, 4096]; // 测试数据大小（字节）
 
@@ -142,6 +150,19 @@ function printSystemInfo(): void
     if (extension_loaded('openssl')) {
         echo '  OpenSSL 版本:     ' . OPENSSL_VERSION_TEXT . "\n";
     }
+
+    // 检测 OpenSSL SM3 支持
+    $sm3Available = function_exists('openssl_digest') && in_array('sm3', openssl_get_md_methods(), true);
+    echo '  OpenSSL SM3:      ' . ($sm3Available ? '✓ (加速)' : '✗ (纯PHP回退)') . "\n";
+
+    // 检测 OpenSSL SM4-GCM 支持
+    $gcmKey = hex2bin('0123456789abcdeffedcba9876543210');
+    $gcmIv = random_bytes(12);
+    $gcmTag = '';
+    $gcmResult = @openssl_encrypt('probe', 'SM4-GCM', $gcmKey, OPENSSL_RAW_DATA, $gcmIv, $gcmTag, '', 16);
+    $gcmAvailable = ($gcmResult !== false);
+    echo '  OpenSSL SM4-GCM:  ' . ($gcmAvailable ? '✓ (硬件加速)' : '✗ (纯PHP回退)') . "\n";
+
     echo '  当前时间:         ' . date('Y-m-d H:i:s') . "\n";
 }
 
@@ -176,6 +197,86 @@ foreach ($sm3Results as $r) {
 echo "\n  SM3 吞吐量:\n";
 foreach (DATA_SIZES as $i => $size) {
     $avg = $sm3Results[$i]['avg'];
+    $throughput = $avg > 0 ? $size / $avg : 0;
+    printf("    %8s 输入: %s\n", formatBytes($size), formatThroughput($throughput));
+}
+
+// SM3 流式哈希
+echo "\n  SM3 流式哈希 (分块更新):\n";
+$sm3StreamResults = [];
+foreach ([1024, 4096] as $totalSize) {
+    $chunkSize = 256;
+    $chunks = [];
+    for ($i = 0; $i < $totalSize; $i += $chunkSize) {
+        $chunks[] = str_repeat('A', min($chunkSize, $totalSize - $i));
+    }
+    $sm3StreamResults[] = benchmark(
+        "SM3 流式哈希 ({$totalSize}B, {$chunkSize}B/chunk)",
+        function () use ($chunks) {
+            $hasher = new Sm3();
+            foreach ($chunks as $chunk) {
+                $hasher->update($chunk);
+            }
+            $hasher->finalize();
+        },
+        SM3_ITERATIONS,
+    );
+}
+foreach ($sm3StreamResults as $r) {
+    printResult($r);
+}
+
+// SM3 流式 vs 一次性
+echo "\n  SM3 一次性 vs 流式 (4096B):\n";
+$data4096 = str_repeat('A', 4096);
+$r = benchmark('SM3 一次性 (4096B)', fn () => Sm3::sm3($data4096), SM3_ITERATIONS);
+printResult($r);
+$chunks4096 = str_split($data4096, 256);
+$r = benchmark('SM3 流式 (4096B, 256B/chunk)', function () use ($chunks4096) {
+    $hasher = new Sm3();
+    foreach ($chunks4096 as $chunk) {
+        $hasher->update($chunk);
+    }
+    $hasher->finalize();
+}, SM3_ITERATIONS);
+printResult($r);
+
+// --- HMAC-SM3 测试 ---
+printSection('HMAC-SM3 性能');
+
+$hmacResults = [];
+$hmacKey = 'this_is_a_secret_key_for_hmac_sm3';
+foreach (DATA_SIZES as $size) {
+    $data = str_repeat('A', $size);
+    $hmacResults[] = benchmark(
+        "HMAC-SM3 ({$size}B)",
+        fn () => HmacSm3::hmac($hmacKey, $data),
+        HMAC_ITERATIONS,
+    );
+}
+foreach ($hmacResults as $r) {
+    printResult($r);
+}
+
+// HMAC-SM3 流式
+echo "\n  HMAC-SM3 流式:\n";
+$data1024 = str_repeat('A', 1024);
+$chunks1024 = str_split($data1024, 256);
+$r = benchmark('HMAC-SM3 一次性 (1024B)', fn () => HmacSm3::hmac($hmacKey, $data1024), HMAC_ITERATIONS);
+printResult($r);
+$r = benchmark('HMAC-SM3 流式 (1024B, 256B/chunk)', function () use ($hmacKey, $chunks1024) {
+    $hmac = HmacSm3::create($hmacKey);
+    foreach ($chunks1024 as $chunk) {
+        $hmac->update($chunk);
+    }
+    $hmac->finalize();
+}, HMAC_ITERATIONS);
+printResult($r);
+
+// HMAC-SM3 吞吐量
+echo "\n  HMAC-SM3 吞吐量:\n";
+foreach (DATA_SIZES as $i => $size) {
+    $avg = $hmacResults[$i]['avg'];
     $throughput = $avg > 0 ? $size / $avg : 0;
     printf("    %8s 输入: %s\n", formatBytes($size), formatThroughput($throughput));
 }
@@ -217,6 +318,101 @@ foreach ($sm4CbcResults as $r) {
     printResult($r);
 }
 
+// CFB 模式
+echo "\n  CFB 模式:\n";
+$sm4CfbResults = [];
+foreach ([64, 256, 1024] as $size) {
+    $data = str_repeat('A', $size);
+    $options = (new Sm4Options())->setMode('cfb')->setIv($sm4Iv);
+    $sm4CfbResults[] = benchmark(
+        "SM4-CFB 加密 ({$size}B)",
+        fn () => Sm4::encrypt($data, $sm4Key, $options),
+        SM4_ITERATIONS,
+    );
+}
+foreach ($sm4CfbResults as $r) {
+    printResult($r);
+}
+
+// OFB 模式
+echo "\n  OFB 模式:\n";
+$sm4OfbResults = [];
+foreach ([64, 256, 1024] as $size) {
+    $data = str_repeat('A', $size);
+    $options = (new Sm4Options())->setMode('ofb')->setIv($sm4Iv);
+    $sm4OfbResults[] = benchmark(
+        "SM4-OFB 加密 ({$size}B)",
+        fn () => Sm4::encrypt($data, $sm4Key, $options),
+        SM4_ITERATIONS,
+    );
+}
+foreach ($sm4OfbResults as $r) {
+    printResult($r);
+}
+
+// CTR 模式
+echo "\n  CTR 模式:\n";
+$sm4CtrResults = [];
+foreach ([64, 256, 1024] as $size) {
+    $data = str_repeat('A', $size);
+    $options = (new Sm4Options())->setMode('ctr')->setIv($sm4Iv);
+    $sm4CtrResults[] = benchmark(
+        "SM4-CTR 加密 ({$size}B)",
+        fn () => Sm4::encrypt($data, $sm4Key, $options),
+        SM4_ITERATIONS,
+    );
+}
+foreach ($sm4CtrResults as $r) {
+    printResult($r);
+}
+
+// GCM 模式
+echo "\n  GCM 模式:\n";
+$sm4GcmIv = bin2hex(random_bytes(12)); // 12 字节 IV
+$gcmAvailable = false;
+$gcmKey = hex2bin($sm4Key);
+$gcmIv = hex2bin($sm4GcmIv);
+$gcmTag = '';
+$gcmProbeResult = @openssl_encrypt('probe', 'SM4-GCM', $gcmKey, OPENSSL_RAW_DATA, $gcmIv, $gcmTag, '', 16);
+$gcmAvailable = ($gcmProbeResult !== false);
+echo '  SM4-GCM 后端: ' . ($gcmAvailable ? 'OpenSSL (硬件加速)' : '纯PHP (GcmPure)') . "\n\n";
+
+$sm4GcmEncResults = [];
+$sm4GcmDecResults = [];
+foreach ([64, 256, 1024] as $size) {
+    $data = str_repeat('A', $size);
+    $options = (new Sm4Options())->setMode('gcm')->setIv($sm4GcmIv);
+    $ct = Sm4::encrypt($data, $sm4Key, $options);
+    $sm4GcmEncResults[] = benchmark(
+        "SM4-GCM 加密 ({$size}B)",
+        fn () => Sm4::encrypt($data, $sm4Key, $options),
+        GCM_ITERATIONS,
+    );
+    $sm4GcmDecResults[] = benchmark(
+        "SM4-GCM 解密 ({$size}B)",
+        fn () => Sm4::decrypt($ct, $sm4Key, $options),
+        GCM_ITERATIONS,
+    );
+}
+echo "  加密:\n";
+foreach ($sm4GcmEncResults as $r) {
+    printResult($r);
+}
+echo "\n  解密:\n";
+foreach ($sm4GcmDecResults as $r) {
+    printResult($r);
+}
+
+// GCM with AAD
+echo "\n  GCM + AAD (附加认证数据):\n";
+$optionsWithAad = (new Sm4Options())->setMode('gcm')->setIv($sm4GcmIv)->setAad('additional authenticated data for benchmark');
+$r = benchmark(
+    'SM4-GCM 加密 + AAD (256B)',
+    fn () => Sm4::encrypt(str_repeat('A', 256), $sm4Key, $optionsWithAad),
+    GCM_ITERATIONS,
+);
+printResult($r);
+
 // SM4 解密
 echo "\n  SM4-CBC 解密:\n";
 $sm4DecResults = [];
@@ -234,12 +430,52 @@ foreach ($sm4DecResults as $r) {
     printResult($r);
 }
 
+// SM4 填充模式
+echo "\n  SM4 填充模式 (CBC, 256B):\n";
+$padData = str_repeat('A', 256);
+foreach (['pkcs5', 'zero', 'iso10126', 'ansix923', 'none'] as $padding) {
+    if ($padding === 'none') {
+        $padData = str_repeat('A', 256); // 256 是 16 的倍数
+    } else {
+        $padData = str_repeat('A', 250); // 非对齐，测试填充
+    }
+    $options = (new Sm4Options())->setMode('cbc')->setIv($sm4Iv)->setPadding($padding);
+    $r = benchmark(
+        "SM4-CBC 加密 (padding={$padding})",
+        fn () => Sm4::encrypt($padData, $sm4Key, $options),
+        SM4_ITERATIONS,
+    );
+    printResult($r);
+}
+
 // SM4 吞吐量
 echo "\n  SM4 吞吐量 (CBC 加密):\n";
 foreach (DATA_SIZES as $i => $size) {
     $avg = $sm4CbcResults[$i]['avg'];
     $throughput = $avg > 0 ? $size / $avg : 0;
     printf("    %8s 输入: %s\n", formatBytes($size), formatThroughput($throughput));
+}
+
+// SM4 模式对比
+echo "\n  SM4 模式吞吐量对比 (1024B):\n";
+$refSize = 1024;
+if (isset($sm4EcbResults[3])) {
+    printf("    ECB: %s\n", formatThroughput($refSize / $sm4EcbResults[3]['avg']));
+}
+if (isset($sm4CbcResults[3])) {
+    printf("    CBC: %s\n", formatThroughput($refSize / $sm4CbcResults[3]['avg']));
+}
+if (isset($sm4CfbResults[2])) {
+    printf("    CFB: %s\n", formatThroughput($refSize / $sm4CfbResults[2]['avg']));
+}
+if (isset($sm4OfbResults[2])) {
+    printf("    OFB: %s\n", formatThroughput($refSize / $sm4OfbResults[2]['avg']));
+}
+if (isset($sm4CtrResults[2])) {
+    printf("    CTR: %s\n", formatThroughput($refSize / $sm4CtrResults[2]['avg']));
+}
+if (isset($sm4GcmEncResults[2])) {
+    printf("    GCM: %s\n", formatThroughput($refSize / $sm4GcmEncResults[2]['avg']));
 }
 
 // --- SM2 测试 ---
@@ -335,6 +571,132 @@ foreach ($sm2DecResults as $r) {
     printResult($r);
 }
 
+// SM2 C1C3C2 vs C1C2C3 模式
+echo "\n  SM2 密文模式对比:\n";
+$cipherMode1 = new Sm2CipherOptions(); // C1C3C2 (default)
+$cipherMode0 = (new Sm2CipherOptions())->setCipherMode(Sm2::CIPHER_MODE_0); // C1C2C3
+$r = benchmark(
+    'SM2 加密 C1C3C2 (64B)',
+    fn () => Sm2::doEncrypt(str_repeat('A', 64), $publicKey, $cipherMode1),
+    SM2_ENCRYPT_ITERATIONS,
+);
+printResult($r);
+$r = benchmark(
+    'SM2 加密 C1C2C3 (64B)',
+    fn () => Sm2::doEncrypt(str_repeat('A', 64), $publicKey, $cipherMode0),
+    SM2_ENCRYPT_ITERATIONS,
+);
+printResult($r);
+
+// --- SM2 PEM 导入/导出 ---
+printSection('SM2 PEM 导入/导出性能');
+
+echo "\n  PEM 导出:\n";
+$r = benchmark('SEC1 私钥导出 (含公钥)', fn () => Pem::exportPrivateKey($privateKey, $publicKey), PEM_ITERATIONS);
+printResult($r);
+$r = benchmark('SEC1 私钥导出 (不含公钥)', fn () => Pem::exportPrivateKey($privateKey), PEM_ITERATIONS);
+printResult($r);
+$r = benchmark('PKCS#8 私钥导出', fn () => Pem::exportPrivateKeyPkcs8($privateKey), PEM_ITERATIONS);
+printResult($r);
+$r = benchmark('SPKI 公钥导出', fn () => Pem::exportPublicKey($publicKey), PEM_ITERATIONS);
+printResult($r);
+
+echo "\n  PEM 导入:\n";
+$sec1Pem = Pem::exportPrivateKey($privateKey, $publicKey);
+$pkcs8Pem = Pem::exportPrivateKeyPkcs8($privateKey);
+$pubPem = Pem::exportPublicKey($publicKey);
+$r = benchmark('SEC1 私钥导入 (含公钥)', fn () => Pem::importPrivateKey($sec1Pem), PEM_ITERATIONS);
+printResult($r);
+$r = benchmark('PKCS#8 私钥导入', fn () => Pem::importPrivateKey($pkcs8Pem), PEM_ITERATIONS);
+printResult($r);
+$r = benchmark('SPKI 公钥导入', fn () => Pem::importPublicKey($pubPem), PEM_ITERATIONS);
+printResult($r);
+
+echo "\n  PEM 导入 (不含公钥, 需推导公钥):\n";
+$sec1NoPubPem = Pem::exportPrivateKey($privateKey); // 不含公钥
+$r = benchmark('SEC1 私钥导入 (需推导公钥)', fn () => Pem::importPrivateKey($sec1NoPubPem), PEM_ITERATIONS);
+printResult($r);
+
+echo "\n  DER 导出:\n";
+$r = benchmark('SEC1 DER 私钥导出', fn () => Pem::exportPrivateKeyDer($privateKey, $publicKey), PEM_ITERATIONS);
+printResult($r);
+$r = benchmark('PKCS#8 DER 私钥导出', fn () => Pem::exportPrivateKeyPkcs8Der($privateKey), PEM_ITERATIONS);
+printResult($r);
+$r = benchmark('SPKI DER 公钥导出', fn () => Pem::exportPublicKeyDer($publicKey), PEM_ITERATIONS);
+printResult($r);
+
+echo "\n  DER 导入:\n";
+$sec1Der = Pem::exportPrivateKeyDer($privateKey, $publicKey);
+$pkcs8Der = Pem::exportPrivateKeyPkcs8Der($privateKey);
+$pubDer = Pem::exportPublicKeyDer($publicKey);
+$r = benchmark('SEC1 DER 私钥导入', fn () => Pem::importPrivateKeyFromDer($sec1Der), PEM_ITERATIONS);
+printResult($r);
+$r = benchmark('PKCS#8 DER 私钥导入', fn () => Pem::importPrivateKeyFromDer($pkcs8Der), PEM_ITERATIONS);
+printResult($r);
+$r = benchmark('SPKI DER 公钥导入', fn () => Pem::importPublicKeyFromDer($pubDer), PEM_ITERATIONS);
+printResult($r);
+
+// --- SM2 密钥交换 ---
+printSection('SM2 密钥交换性能');
+
+// 生成静态密钥对
+$kpA = Sm2::generateKeyPairHex();
+$kpB = Sm2::generateKeyPairHex();
+
+// 临时密钥对
+$ephA = KeyExchange::generateEphemeralKeyPair();
+$ephB = KeyExchange::generateEphemeralKeyPair();
+
+echo "\n  临时密钥对生成:\n";
+$r = benchmark('密钥交换临时密钥对', fn () => KeyExchange::generateEphemeralKeyPair(), SM2_KEYGEN_ITERATIONS);
+printResult($r);
+
+echo "\n  共享密钥计算:\n";
+$r = benchmark(
+    '发起方计算共享密钥 (32B)',
+    fn () => KeyExchange::initiatorComputeKey(
+        $kpA->getPrivateKey(),
+        $ephA->getPrivateKey(),
+        $kpB->getPublicKey(),
+        $ephB->getPublicKey(),
+        32
+    ),
+    KEY_EXCHANGE_ITERATIONS,
+);
+printResult($r);
+
+$r = benchmark(
+    '响应方计算共享密钥 (32B)',
+    fn () => KeyExchange::responderComputeKey(
+        $kpB->getPrivateKey(),
+        $ephB->getPrivateKey(),
+        $kpA->getPublicKey(),
+        $ephA->getPublicKey(),
+        32
+    ),
+    KEY_EXCHANGE_ITERATIONS,
+);
+printResult($r);
+
+// 密钥交换完整流程（含临时密钥对生成）
+$r = benchmark(
+    '密钥交换完整流程 (含临时密钥对生成)',
+    function () use ($kpA, $kpB) {
+        $eA = KeyExchange::generateEphemeralKeyPair();
+        $eB = KeyExchange::generateEphemeralKeyPair();
+        $kA = KeyExchange::initiatorComputeKey(
+            $kpA->getPrivateKey(), $eA->getPrivateKey(),
+            $kpB->getPublicKey(), $eB->getPublicKey(), 32
+        );
+        $kB = KeyExchange::responderComputeKey(
+            $kpB->getPrivateKey(), $eB->getPrivateKey(),
+            $kpA->getPublicKey(), $eA->getPublicKey(), 32
+        );
+    },
+    KEY_EXCHANGE_ITERATIONS,
+);
+printResult($r);
+
 // ============================================================================
 // 汇总
 // ============================================================================
@@ -342,56 +704,70 @@ foreach ($sm2DecResults as $r) {
 printSection('性能汇总');
 
 echo "\n";
-printf("  %-30s  %15s  %15s  %15s\n", '操作', '平均耗时', 'P50', '吞吐量');
-echo str_repeat('-', 80) . "\n";
+printf("  %-35s  %15s  %15s  %15s\n", '操作', '平均耗时', 'P50', '吞吐量');
+echo str_repeat('-', 85) . "\n";
 
 // SM3
 foreach (DATA_SIZES as $i => $size) {
     $label = "SM3 哈希 ({$size}B)";
     $throughput = $sm3Results[$i]['avg'] > 0 ? formatThroughput($size / $sm3Results[$i]['avg']) : '-';
-    printf("  %-30s  %15s  %15s  %15s\n", $label, formatTime($sm3Results[$i]['avg']), formatTime($sm3Results[$i]['p50']), $throughput);
+    printf("  %-35s  %15s  %15s  %15s\n", $label, formatTime($sm3Results[$i]['avg']), formatTime($sm3Results[$i]['p50']), $throughput);
+}
+
+// HMAC-SM3
+foreach (DATA_SIZES as $i => $size) {
+    $label = "HMAC-SM3 ({$size}B)";
+    $throughput = $hmacResults[$i]['avg'] > 0 ? formatThroughput($size / $hmacResults[$i]['avg']) : '-';
+    printf("  %-35s  %15s  %15s  %15s\n", $label, formatTime($hmacResults[$i]['avg']), formatTime($hmacResults[$i]['p50']), $throughput);
 }
 
 // SM4-CBC 加密
 foreach (DATA_SIZES as $i => $size) {
     $label = "SM4-CBC 加密 ({$size}B)";
     $throughput = $sm4CbcResults[$i]['avg'] > 0 ? formatThroughput($size / $sm4CbcResults[$i]['avg']) : '-';
-    printf("  %-30s  %15s  %15s  %15s\n", $label, formatTime($sm4CbcResults[$i]['avg']), formatTime($sm4CbcResults[$i]['p50']), $throughput);
+    printf("  %-35s  %15s  %15s  %15s\n", $label, formatTime($sm4CbcResults[$i]['avg']), formatTime($sm4CbcResults[$i]['p50']), $throughput);
 }
 
 // SM4-CBC 解密
 foreach (DATA_SIZES as $i => $size) {
     $label = "SM4-CBC 解密 ({$size}B)";
     $throughput = $sm4DecResults[$i]['avg'] > 0 ? formatThroughput($size / $sm4DecResults[$i]['avg']) : '-';
-    printf("  %-30s  %15s  %15s  %15s\n", $label, formatTime($sm4DecResults[$i]['avg']), formatTime($sm4DecResults[$i]['p50']), $throughput);
+    printf("  %-35s  %15s  %15s  %15s\n", $label, formatTime($sm4DecResults[$i]['avg']), formatTime($sm4DecResults[$i]['p50']), $throughput);
+}
+
+// SM4-GCM
+foreach ([64, 256, 1024] as $i => $size) {
+    $label = "SM4-GCM 加密 ({$size}B)";
+    $throughput = $sm4GcmEncResults[$i]['avg'] > 0 ? formatThroughput($size / $sm4GcmEncResults[$i]['avg']) : '-';
+    printf("  %-35s  %15s  %15s  %15s\n", $label, formatTime($sm4GcmEncResults[$i]['avg']), formatTime($sm4GcmEncResults[$i]['p50']), $throughput);
 }
 
 // SM2 签名
 foreach ([16, 256, 1024] as $i => $size) {
     $label = "SM2 签名 ({$size}B)";
     $throughput = $sm2SignResults[$i]['avg'] > 0 ? formatThroughput($size / $sm2SignResults[$i]['avg']) : '-';
-    printf("  %-30s  %15s  %15s  %15s\n", $label, formatTime($sm2SignResults[$i]['avg']), formatTime($sm2SignResults[$i]['p50']), $throughput);
+    printf("  %-35s  %15s  %15s  %15s\n", $label, formatTime($sm2SignResults[$i]['avg']), formatTime($sm2SignResults[$i]['p50']), $throughput);
 }
 
 // SM2 验签
 foreach ([16, 256, 1024] as $i => $size) {
     $label = "SM2 验签 ({$size}B)";
     $throughput = $sm2VerifyResults[$i]['avg'] > 0 ? formatThroughput($size / $sm2VerifyResults[$i]['avg']) : '-';
-    printf("  %-30s  %15s  %15s  %15s\n", $label, formatTime($sm2VerifyResults[$i]['avg']), formatTime($sm2VerifyResults[$i]['p50']), $throughput);
+    printf("  %-35s  %15s  %15s  %15s\n", $label, formatTime($sm2VerifyResults[$i]['avg']), formatTime($sm2VerifyResults[$i]['p50']), $throughput);
 }
 
 // SM2 加密
 foreach ([16, 64, 256] as $i => $size) {
     $label = "SM2 加密 ({$size}B)";
     $throughput = $sm2EncResults[$i]['avg'] > 0 ? formatThroughput($size / $sm2EncResults[$i]['avg']) : '-';
-    printf("  %-30s  %15s  %15s  %15s\n", $label, formatTime($sm2EncResults[$i]['avg']), formatTime($sm2EncResults[$i]['p50']), $throughput);
+    printf("  %-35s  %15s  %15s  %15s\n", $label, formatTime($sm2EncResults[$i]['avg']), formatTime($sm2EncResults[$i]['p50']), $throughput);
 }
 
 // SM2 解密
 foreach ([16, 64, 256] as $i => $size) {
     $label = "SM2 解密 ({$size}B)";
     $throughput = $sm2DecResults[$i]['avg'] > 0 ? formatThroughput($size / $sm2DecResults[$i]['avg']) : '-';
-    printf("  %-30s  %15s  %15s  %15s\n", $label, formatTime($sm2DecResults[$i]['avg']), formatTime($sm2DecResults[$i]['p50']), $throughput);
+    printf("  %-35s  %15s  %15s  %15s\n", $label, formatTime($sm2DecResults[$i]['avg']), formatTime($sm2DecResults[$i]['p50']), $throughput);
 }
 
 echo "\n测试完成。\n";
