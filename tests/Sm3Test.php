@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CryptoSm\Tests;
 
 use CryptoSm\SM3\Sm3;
+use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 
 class Sm3Test extends TestCase
@@ -136,9 +137,8 @@ class Sm3Test extends TestCase
 
     /**
      * GB/T 32905-2016 标准测试向量: SM3(0x61 重复 1000000 次)
-     *
-     * @group large
      */
+    #[Group('slow')]
     public function testSm3StandardVectorMillionChars(): void
     {
         $input = str_repeat('a', 1000000);

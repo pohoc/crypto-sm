@@ -241,7 +241,7 @@ class Sm4Test extends TestCase
     public function testSm4OptionsInvalidMode(): void
     {
         $this->expectException(InvalidKeyException::class);
-        (new Sm4Options())->setMode('cfb');
+        (new Sm4Options())->setMode('invalid_mode');
     }
 
     public function testSm4OptionsInvalidPadding(): void
