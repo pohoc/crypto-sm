@@ -25,10 +25,10 @@ class HexTest extends TestCase
         $this->assertEquals([0x0f, 0xff], $bytes);
     }
 
-    public function testToBytesWithWhitespace(): void
+    public function testToBytesWithWhitespaceThrows(): void
     {
-        $bytes = Hex::toBytes('01 23 45');
-        $this->assertEquals([0x01, 0x23, 0x45], $bytes);
+        $this->expectException(\InvalidArgumentException::class);
+        Hex::toBytes('01 23 45');
     }
 
     public function testToBytesEmpty(): void
@@ -55,10 +55,10 @@ class HexTest extends TestCase
         $this->assertEquals([0xab], $bytes);
     }
 
-    public function testToBytesStripsNonHex(): void
+    public function testToBytesStripsNonHexThrows(): void
     {
-        $bytes = Hex::toBytes('01-23:45');
-        $this->assertEquals([0x01, 0x23, 0x45], $bytes);
+        $this->expectException(\InvalidArgumentException::class);
+        Hex::toBytes('01-23:45');
     }
 
     // ========================================================================
@@ -146,10 +146,10 @@ class HexTest extends TestCase
         $this->assertEquals('', $str);
     }
 
-    public function testFromHexWithWhitespace(): void
+    public function testFromHexWithWhitespaceThrows(): void
     {
-        $str = Hex::fromHex('41 42');
-        $this->assertEquals('AB', $str);
+        $this->expectException(\InvalidArgumentException::class);
+        Hex::fromHex('41 42');
     }
 
     public function testFromHexAllZeros(): void
@@ -164,10 +164,10 @@ class HexTest extends TestCase
         $this->assertEquals("\xff\xff\xff\xff", $str);
     }
 
-    public function testFromHexStripsNonHex(): void
+    public function testFromHexStripsNonHexThrows(): void
     {
-        $str = Hex::fromHex('41-42');
-        $this->assertEquals('AB', $str);
+        $this->expectException(\InvalidArgumentException::class);
+        Hex::fromHex('41-42');
     }
 
     // ========================================================================
@@ -242,16 +242,16 @@ class HexTest extends TestCase
     // 纯非 hex 输入
     // ========================================================================
 
-    public function testToBytesAllNonHex(): void
+    public function testToBytesAllNonHexThrows(): void
     {
-        $bytes = Hex::toBytes('xyz!@#');
-        $this->assertEquals([], $bytes);
+        $this->expectException(\InvalidArgumentException::class);
+        Hex::toBytes('xyz!@#');
     }
 
-    public function testFromHexAllNonHex(): void
+    public function testFromHexAllNonHexThrows(): void
     {
-        $str = Hex::fromHex('xyz!@#');
-        $this->assertEquals('', $str);
+        $this->expectException(\InvalidArgumentException::class);
+        Hex::fromHex('xyz!@#');
     }
 
     // ========================================================================

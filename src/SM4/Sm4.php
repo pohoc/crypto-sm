@@ -66,6 +66,9 @@ class Sm4 implements CipherInterface
 
     private static function crypt(string $data, string $key, bool $encrypt, ?Sm4Options $options = null): string
     {
+        if (!extension_loaded('openssl')) {
+            throw new CryptoException('OpenSSL extension is required for SM4');
+        }
         $options ??= new Sm4Options();
         $mode = strtolower($options->getMode());
         $padding = strtolower($options->getPadding());

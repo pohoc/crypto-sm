@@ -17,7 +17,12 @@ class Hex
      */
     public static function toBytes(string $hex): array
     {
-        $hex = preg_replace('/[^0-9a-fA-F]/', '', $hex) ?? '';
+        if ($hex === '') {
+            return [];
+        }
+        if (!ctype_xdigit($hex)) {
+            throw new \InvalidArgumentException('Invalid hex string');
+        }
         if (strlen($hex) % 2 !== 0) {
             $hex = '0' . $hex;
         }
@@ -59,7 +64,12 @@ class Hex
      */
     public static function fromHex(string $hex): string
     {
-        $hex = preg_replace('/[^0-9a-fA-F]/', '', $hex) ?? '';
+        if ($hex === '') {
+            return '';
+        }
+        if (!ctype_xdigit($hex)) {
+            throw new \InvalidArgumentException('Invalid hex string');
+        }
         if (strlen($hex) % 2 !== 0) {
             $hex = '0' . $hex;
         }

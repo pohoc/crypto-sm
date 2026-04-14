@@ -184,7 +184,13 @@ class Sm3 implements HashInterface
     private static function pad(string $msg): array
     {
         $len = strlen($msg);
+        // GM/T 0004-2012: message length in bits, max 2^64 - 1 bits
         $bitLen = $len * 8;
+        if (PHP_INT_SIZE >= 8) {
+            if ($len > (int) ((PHP_INT_MAX - 7) / 8)) {
+                throw new \RuntimeException('SM3: message too long, bit length overflow');
+            }
+        }
 
         $msg .= chr(0x80);
         $padLen = (56 - (($len + 1) % 64) + 64) % 64;

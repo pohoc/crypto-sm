@@ -133,7 +133,13 @@ class Sm2 implements SignerInterface, CipherInterface
         }
 
         $dataLen = strlen($data);
-        $k = bin2hex(random_bytes(32));
+        $n = self::gmpParam('n');
+
+        // GM/T 0003-2012 5.4.2: k must be in [1, n-1]
+        do {
+            $k = bin2hex(random_bytes(32));
+            $kGmp = gmp_init($k, 16);
+        } while (gmp_cmp($kGmp, 1) < 0 || gmp_cmp($kGmp, $n) >= 0);
 
         $x1y1 = self::pointMultiply($k);
         $x1 = substr($x1y1, 0, 64);
@@ -153,7 +159,10 @@ class Sm2 implements SignerInterface, CipherInterface
                 if ($retry >= $maxRetries) {
                     throw new CryptoException('SM2 encryption failed: KDF derived all-zero key after max retries');
                 }
-                $k = bin2hex(random_bytes(32));
+                do {
+                    $k = bin2hex(random_bytes(32));
+                    $kGmp = gmp_init($k, 16);
+                } while (gmp_cmp($kGmp, 1) < 0 || gmp_cmp($kGmp, $n) >= 0);
                 $x1y1 = self::pointMultiply($k);
                 $x1 = substr($x1y1, 0, 64);
                 $C1 = $x1y1;
@@ -327,8 +336,9 @@ class Sm2 implements SignerInterface, CipherInterface
             }
             $x1Dec = $x1y1['x'];
 
-            if (gmp_cmp($x1Dec, $n) >= 0 || gmp_cmp($x1Dec, 0) === 0) {
-                continue;
+            // GM/T 0003-2012 5.2.2: x1' = x1 mod n (take modulo, do NOT regenerate k)
+            if (gmp_cmp($x1Dec, $n) >= 0) {
+                $x1Dec = gmp_mod($x1Dec, $n);
             }
 
             $r = gmp_mod(gmp_add($e, $x1Dec), $n);
@@ -455,7 +465,11 @@ class Sm2 implements SignerInterface, CipherInterface
     {
         $ct = 1;
         $key = '';
+        $maxCt = 0xFFFFFFFF; // 32-bit counter limit per GM/T 0003-2012
         while (strlen($key) < $keyLen) {
+            if ($ct > $maxCt) {
+                throw new CryptoException('KDF counter overflow: key length too large');
+            }
             $hash = Sm3::sm3(Hex::fromHex($seed . self::intToHex($ct)));
             $key .= Hex::fromHex($hash);
             $ct++;
@@ -498,6 +512,10 @@ class Sm2 implements SignerInterface, CipherInterface
 
         $factor ??= bin2hex(random_bytes(32));
         $factorDec = gmp_init($factor, 16);
+        $n = self::gmpParam('n');
+        if (gmp_cmp($factorDec, 1) < 0 || gmp_cmp($factorDec, $n) >= 0) {
+            throw new CryptoException('Signature factor must be in range [1, n-1]');
+        }
 
         // For base point multiplication, use precomputed table with 4-bit window
         if ($isBasePoint) {
@@ -707,11 +725,15 @@ class Sm2 implements SignerInterface, CipherInterface
         self::$gmpTwo ??= gmp_init(2);
         self::$gmpThree ??= gmp_init(3);
 
-        $yInv = gmp_invert(gmp_mul(self::$gmpTwo, $y), $p);
+        $denom = gmp_mul(self::$gmpTwo, $y);
+        $yInv = gmp_invert($denom, $p);
+        if ($yInv === false) {
+            throw new CryptoException('Point doubling failed: modular inverse does not exist (point at infinity)');
+        }
         $lambda = gmp_mod(
             gmp_mul(
                 gmp_add(gmp_mul(self::$gmpThree, gmp_pow($x, 2)), $a),
-                $yInv === false ? gmp_init(0) : $yInv
+                $yInv
             ),
             $p
         );

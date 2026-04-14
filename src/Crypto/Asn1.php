@@ -33,10 +33,17 @@ class Asn1
         $len = ord($data[$offset++]);
         if ($len > 128) {
             $lenBytes = $len & 0x7F;
+            if ($offset + $lenBytes > strlen($data)) {
+                throw new CryptoException('ASN.1 length bytes exceed available data');
+            }
             $len = 0;
             for ($i = 0; $i < $lenBytes; $i++) {
                 $len = ($len << 8) | ord($data[$offset++]);
             }
+        }
+
+        if ($offset + $len > strlen($data)) {
+            throw new CryptoException('ASN.1 length exceeds available data');
         }
 
         $value = '';
@@ -70,10 +77,17 @@ class Asn1
         $seqLen = ord($data[$offset++]);
         if ($seqLen > 128) {
             $lenBytes = $seqLen & 0x7F;
+            if ($offset + $lenBytes > strlen($data)) {
+                throw new CryptoException('ASN.1 length bytes exceed available data');
+            }
             $seqLen = 0;
             for ($i = 0; $i < $lenBytes; $i++) {
                 $seqLen = ($seqLen << 8) | ord($data[$offset++]);
             }
+        }
+
+        if ($offset + $seqLen > strlen($data)) {
+            throw new CryptoException('ASN.1 length exceeds available data');
         }
 
         return $seqLen;
