@@ -171,10 +171,22 @@ class Asn1
      */
     public static function encodeDerSignature(string $rHex, string $sHex): string
     {
+        return bin2hex(self::encodeDerSignatureBinary($rHex, $sHex));
+    }
+
+    /**
+     * Encode an SM2 signature in DER format as raw binary.
+     *
+     * @param  string $rHex R component as 64-char hex string
+     * @param  string $sHex S component as 64-char hex string
+     * @return string DER-encoded signature as raw binary
+     */
+    public static function encodeDerSignatureBinary(string $rHex, string $sHex): string
+    {
         $rBytes = self::encodeInteger($rHex);
         $sBytes = self::encodeInteger($sHex);
         $sequence = $rBytes . $sBytes;
-        return bin2hex(self::encodeSequence($sequence));
+        return self::encodeSequence($sequence);
     }
 
     /**
@@ -194,6 +206,18 @@ class Asn1
             throw new CryptoException('Invalid DER signature hex');
         }
 
+        return self::decodeDerSignatureBinary($data);
+    }
+
+    /**
+     * Decode a DER-encoded SM2 signature from raw binary.
+     *
+     * @param  string               $data DER-encoded signature as raw binary
+     * @return array{string,string} [rHex, sHex] — 64-char zero-padded hex strings
+     * @throws CryptoException      If the DER data is invalid
+     */
+    public static function decodeDerSignatureBinary(string $data): array
+    {
         $offset = 0;
         self::decodeSequence($data, $offset);
 

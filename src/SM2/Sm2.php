@@ -85,6 +85,63 @@ class Sm2 implements SignerInterface, CipherInterface
     }
 
     /**
+     * Derive the public key from a private key.
+     *
+     * @param  string              $privateKey 64-char hex string
+     * @return string              128-char hex uncompressed public key
+     * @throws InvalidKeyException If private key is invalid
+     */
+    public static function getPublicKey(string $privateKey): string
+    {
+        self::validatePrivateKey($privateKey);
+        return self::pointMultiply($privateKey);
+    }
+
+    /**
+     * Validate a private key format and range.
+     *
+     * @param  string              $privateKey 64-char hex string
+     * @throws InvalidKeyException If private key is invalid
+     */
+    public static function validatePrivateKey(string $privateKey): void
+    {
+        if (!preg_match('/^[0-9a-fA-F]{64}$/', $privateKey)) {
+            throw new InvalidKeyException('Private key must be 256 bits (64 hex chars)');
+        }
+        $n = self::gmpParam('n');
+        $d = gmp_init($privateKey, 16);
+        if (gmp_cmp($d, 1) < 0 || gmp_cmp($d, $n) >= 0) {
+            throw new InvalidKeyException('Private key must be in range [1, n-1]');
+        }
+    }
+
+    /**
+     * Check if a public key is on the SM2 curve.
+     *
+     * @param  string $publicKey 128-char hex string
+     * @return bool
+     */
+    public static function isOnCurve(string $publicKey): bool
+    {
+        if (strlen($publicKey) !== 128) {
+            return false;
+        }
+        $p = self::gmpParam('p');
+        $a = self::gmpParam('a');
+        $b = self::gmpParam('b');
+        $x = gmp_init(substr($publicKey, 0, 64), 16);
+        $y = gmp_init(substr($publicKey, 64), 16);
+
+        if (gmp_cmp($x, 0) < 0 || gmp_cmp($x, $p) >= 0 || gmp_cmp($y, 0) < 0 || gmp_cmp($y, $p) >= 0) {
+            return false;
+        }
+
+        $left = gmp_mod(gmp_pow($y, 2), $p);
+        $right = gmp_mod(gmp_add(gmp_add(gmp_pow($x, 3), gmp_mul($a, $x)), $b), $p);
+        return gmp_cmp($left, $right) === 0;
+    }
+
+    /**
      * Generate a new SM2 key pair.
      *
      * @return Keypair Generated key pair with hex-encoded keys
@@ -742,41 +799,53 @@ class Sm2 implements SignerInterface, CipherInterface
         return ['x' => $x3, 'y' => $y3];
     }
 
-    private static function validatePrivateKey(string $privateKey): void
-    {
-        if (!preg_match('/^[0-9a-fA-F]{64}$/', $privateKey)) {
-            throw new InvalidKeyException('Private key must be 256 bits (64 hex chars)');
-        }
-        $n = self::gmpParam('n');
-        $d = gmp_init($privateKey, 16);
-        if (gmp_cmp($d, 1) < 0 || gmp_cmp($d, $n) >= 0) {
-            throw new InvalidKeyException('Private key must be in range [1, n-1]');
-        }
-    }
-
     private static function isAllZero(string $data): bool
     {
         return trim($data, "\0") === '';
     }
 
-    private static function isOnCurve(string $publicKey): bool
+    /**
+     * Get a GMP curve parameter by key (public accessor for KeyExchange).
+     *
+     * @return \GMP
+     */
+    public static function gmpParamPublic(string $key): \GMP
     {
-        if (strlen($publicKey) !== 128) {
-            return false;
-        }
-        $p = self::gmpParam('p');
-        $a = self::gmpParam('a');
-        $b = self::gmpParam('b');
-        $x = gmp_init(substr($publicKey, 0, 64), 16);
-        $y = gmp_init(substr($publicKey, 64), 16);
+        return self::gmpParam($key);
+    }
 
-        if (gmp_cmp($x, 0) < 0 || gmp_cmp($x, $p) >= 0 || gmp_cmp($y, 0) < 0 || gmp_cmp($y, $p) >= 0) {
-            return false;
-        }
+    /**
+     * Point multiplication returning hex string (public accessor for KeyExchange).
+     *
+     * @param  string      $point  128-char hex point or scalar (for base point)
+     * @param  string|null $factor 64-char hex scalar (optional)
+     * @return string      128-char hex result point
+     */
+    public static function pointMultiplyPublic(string $point, ?string $factor = null): string
+    {
+        return self::pointMultiply($point, $factor);
+    }
 
-        $left = gmp_mod(gmp_pow($y, 2), $p);
-        $right = gmp_mod(gmp_add(gmp_add(gmp_pow($x, 3), gmp_mul($a, $x)), $b), $p);
-        return gmp_cmp($left, $right) === 0;
+    /**
+     * Point addition returning hex string (public accessor for KeyExchange).
+     *
+     * @param  string      $point1Hex 128-char hex point
+     * @param  string      $point2Hex 128-char hex point
+     * @return string|null 128-char hex result point, or null if points cancel
+     */
+    public static function pointAddPublic(string $point1Hex, string $point2Hex): ?string
+    {
+        $p1 = self::parsePoint($point1Hex);
+        $p2 = self::parsePoint($point2Hex);
+        if ($p1 === null || $p2 === null) {
+            return null;
+        }
+        $result = self::pointAdd($p1['x'], $p1['y'], $p2['x'], $p2['y'], self::gmpParam('p'), self::gmpParam('a'));
+        if ($result === null) {
+            return null;
+        }
+        return str_pad(gmp_strval($result['x'], 16), 64, '0', STR_PAD_LEFT) .
+            str_pad(gmp_strval($result['y'], 16), 64, '0', STR_PAD_LEFT);
     }
 
     /**

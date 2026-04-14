@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CryptoSm\SM4;
 
+use CryptoSm\Crypto\GcmPure;
 use CryptoSm\Exception\CryptoException;
 use CryptoSm\Exception\InvalidKeyException;
 use CryptoSm\Interfaces\CipherInterface;
@@ -22,6 +23,21 @@ class Sm4 implements CipherInterface
 
     /** @var string Cipher Block Chaining mode (default, recommended) */
     public const MODE_CBC = 'cbc';
+
+    /** @var string Cipher Feedback mode (stream-like, no padding needed) */
+    public const MODE_CFB = 'cfb';
+
+    /** @var string Output Feedback mode (stream-like, no padding needed) */
+    public const MODE_OFB = 'ofb';
+
+    /** @var string Counter mode (stream-like, no padding needed) */
+    public const MODE_CTR = 'ctr';
+
+    /** @var string Galois/Counter mode (authenticated encryption) */
+    public const MODE_GCM = 'gcm';
+
+    /** @var array<int,string> Modes that don't require padding (stream-like) */
+    private const STREAM_MODES = [self::MODE_CFB, self::MODE_OFB, self::MODE_CTR, self::MODE_GCM];
 
     /**
      * Encrypt data using SM4.
@@ -74,16 +90,27 @@ class Sm4 implements CipherInterface
         $padding = strtolower($options->getPadding());
 
         self::validateHexKey($key);
+
+        // GCM mode has its own handling
+        if ($mode === self::MODE_GCM) {
+            return self::cryptGcm($data, $key, $encrypt, $options);
+        }
+
         $ivBin = '';
-        if ($mode === self::MODE_CBC) {
+        $needsIv = !in_array($mode, [self::MODE_ECB], true);
+        if ($needsIv) {
             $iv = $options->getIv();
             self::validateHexKey($iv, 'IV');
             $ivBin = hex2bin($iv);
             if ($ivBin === false) {
                 throw new InvalidKeyException('Invalid IV hex');
             }
-        } elseif ($mode !== self::MODE_ECB) {
-            throw new InvalidKeyException('Mode must be ecb or cbc');
+        }
+
+        // Validate mode
+        $validModes = [self::MODE_ECB, self::MODE_CBC, self::MODE_CFB, self::MODE_OFB, self::MODE_CTR];
+        if (!in_array($mode, $validModes, true)) {
+            throw new InvalidKeyException('Unsupported SM4 mode: ' . $mode);
         }
 
         $keyBin = hex2bin($key);
@@ -91,46 +118,212 @@ class Sm4 implements CipherInterface
             throw new InvalidKeyException('Invalid key hex');
         }
 
+        $opensslCipher = self::getOpenSSLMethodName($mode);
+        $isStreamMode = in_array($mode, self::STREAM_MODES, true);
+
         if ($encrypt) {
-            $input = self::maybePad($data, $padding);
+            $input = $isStreamMode ? $data : self::maybePad($data, $padding);
             $cipher = openssl_encrypt(
                 $input,
-                $mode === self::MODE_ECB ? 'SM4-ECB' : 'SM4-CBC',
+                $opensslCipher,
                 $keyBin,
                 OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING,
-                $mode === self::MODE_CBC ? $ivBin : ''
+                $needsIv ? $ivBin : ''
             );
             if ($cipher === false) {
-                throw new CryptoException('SM4 encryption failed');
+                throw new CryptoException('SM4 encryption failed: ' . openssl_error_string());
             }
             return bin2hex($cipher);
         }
 
+        // Decrypt
         if (!preg_match('/^[0-9a-fA-F]+$/', $data) || strlen($data) % 2 !== 0) {
             throw new InvalidKeyException('Invalid ciphertext hex');
         }
         $cipher = hex2bin($data);
-        if ($cipher === false || strlen($cipher) % 16 !== 0) {
+        if ($cipher === false) {
             throw new InvalidKeyException('Invalid ciphertext hex');
         }
-        $plain = openssl_decrypt(
-            $cipher,
-            $mode === self::MODE_ECB ? 'SM4-ECB' : 'SM4-CBC',
-            $keyBin,
-            OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING,
-            $mode === self::MODE_CBC ? $ivBin : ''
-        );
-        if ($plain === false) {
-            throw new CryptoException('SM4 decryption failed');
+        if (!$isStreamMode && strlen($cipher) % 16 !== 0) {
+            throw new InvalidKeyException('Invalid ciphertext: length not multiple of block size');
         }
 
-        return self::maybeUnpad($plain, $padding);
+        $plain = openssl_decrypt(
+            $cipher,
+            $opensslCipher,
+            $keyBin,
+            OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING,
+            $needsIv ? $ivBin : ''
+        );
+        if ($plain === false) {
+            throw new CryptoException('SM4 decryption failed: ' . openssl_error_string());
+        }
+
+        return $isStreamMode ? $plain : self::maybeUnpad($plain, $padding);
+    }
+
+    /**
+     * Handle SM4-GCM encryption/decryption.
+     * Falls back to pure PHP implementation when OpenSSL SM4-GCM is unavailable.
+     */
+    private static function cryptGcm(string $data, string $key, bool $encrypt, Sm4Options $options): string
+    {
+        $iv = $options->getIv();
+        if (!preg_match('/^[0-9a-fA-F]+$/', $iv) || strlen($iv) < 2 || strlen($iv) % 2 !== 0) {
+            throw new InvalidKeyException('GCM mode requires a valid IV (at least 1 byte)');
+        }
+        $ivBin = hex2bin($iv);
+        if ($ivBin === false) {
+            throw new InvalidKeyException('Invalid GCM IV hex');
+        }
+
+        self::validateHexKey($key);
+        $keyBin = hex2bin($key);
+        if ($keyBin === false) {
+            throw new InvalidKeyException('Invalid key hex');
+        }
+
+        $aad = $options->getAad();
+        $tagLength = $options->getTagLength();
+
+        // Try OpenSSL first, fall back to pure PHP
+        if (self::isOpenSSLGcmAvailable()) {
+            return self::cryptGcmOpenSSL($data, $keyBin, $ivBin, $aad, $tagLength, $encrypt);
+        }
+
+        return self::cryptGcmPure($data, $keyBin, $ivBin, $aad, $tagLength, $encrypt);
+    }
+
+    /**
+     * Check if OpenSSL supports SM4-GCM (cached result).
+     */
+    private static ?bool $gcmAvailable = null;
+
+    private static function isOpenSSLGcmAvailable(): bool
+    {
+        if (self::$gcmAvailable !== null) {
+            return self::$gcmAvailable;
+        }
+        // Probe: actually try to encrypt to verify support
+        $key = hex2bin('0123456789abcdeffedcba9876543210');
+        if ($key === false) {
+            self::$gcmAvailable = false;
+            return false;
+        }
+        $iv = random_bytes(12);
+        $tag = '';
+        $result = @openssl_encrypt('probe', 'SM4-GCM', $key, OPENSSL_RAW_DATA, $iv, $tag, '', 16);
+        self::$gcmAvailable = ($result !== false);
+        return self::$gcmAvailable;
+    }
+
+    /**
+     * SM4-GCM via OpenSSL.
+     */
+    private static function cryptGcmOpenSSL(string $data, string $keyBin, string $ivBin, string $aad, int $tagLength, bool $encrypt): string
+    {
+        if ($encrypt) {
+            $tag = '';
+            $cipher = @openssl_encrypt(
+                $data,
+                'SM4-GCM',
+                $keyBin,
+                OPENSSL_RAW_DATA,
+                $ivBin,
+                $tag,
+                $aad,
+                $tagLength
+            );
+            if ($cipher === false) {
+                throw new CryptoException('SM4-GCM encryption failed: ' . openssl_error_string());
+            }
+            return bin2hex($cipher) . bin2hex((string) $tag);
+        }
+
+        // Decrypt: data = ciphertext_hex + tag_hex
+        $tagHex = substr($data, -$tagLength * 2);
+        $cipherHex = substr($data, 0, -$tagLength * 2);
+
+        if (!preg_match('/^[0-9a-fA-F]+$/', $cipherHex) || strlen($cipherHex) % 2 !== 0) {
+            throw new CryptoException('Invalid GCM ciphertext hex');
+        }
+        if (!preg_match('/^[0-9a-fA-F]+$/', $tagHex) || strlen($tagHex) % 2 !== 0) {
+            throw new CryptoException('Invalid GCM tag hex');
+        }
+
+        $cipherBin = hex2bin($cipherHex);
+        $tagBin = hex2bin($tagHex);
+        if ($cipherBin === false || $tagBin === false) {
+            throw new CryptoException('Invalid GCM ciphertext or tag');
+        }
+
+        $plain = @openssl_decrypt(
+            $cipherBin,
+            'SM4-GCM',
+            $keyBin,
+            OPENSSL_RAW_DATA,
+            $ivBin,
+            $tagBin,
+            $aad
+        );
+        if ($plain === false) {
+            throw new CryptoException('SM4-GCM decryption failed: authentication tag mismatch');
+        }
+
+        return $plain;
+    }
+
+    /**
+     * SM4-GCM via pure PHP implementation.
+     */
+    private static function cryptGcmPure(string $data, string $keyBin, string $ivBin, string $aad, int $tagLength, bool $encrypt): string
+    {
+        $gcm = GcmPure::fromKey($keyBin);
+
+        if ($encrypt) {
+            $result = $gcm->encrypt($data, $ivBin, $aad, $tagLength);
+            return bin2hex($result['ciphertext']) . bin2hex($result['tag']);
+        }
+
+        // Decrypt: data = ciphertext_hex + tag_hex
+        $tagHex = substr($data, -$tagLength * 2);
+        $cipherHex = substr($data, 0, -$tagLength * 2);
+
+        if (!preg_match('/^[0-9a-fA-F]+$/', $cipherHex) || strlen($cipherHex) % 2 !== 0) {
+            throw new CryptoException('Invalid GCM ciphertext hex');
+        }
+        if (!preg_match('/^[0-9a-fA-F]+$/', $tagHex) || strlen($tagHex) % 2 !== 0) {
+            throw new CryptoException('Invalid GCM tag hex');
+        }
+
+        $cipherBin = hex2bin($cipherHex);
+        $tagBin = hex2bin($tagHex);
+        if ($cipherBin === false || $tagBin === false) {
+            throw new CryptoException('Invalid GCM ciphertext or tag');
+        }
+
+        return $gcm->decrypt($cipherBin, $tagBin, $ivBin, $aad, $tagLength);
+    }
+
+    /**
+     * Get the OpenSSL cipher method name for the given SM4 mode.
+     */
+    private static function getOpenSSLMethodName(string $mode): string
+    {
+        return match ($mode) {
+            self::MODE_ECB => 'SM4-ECB',
+            self::MODE_CBC => 'SM4-CBC',
+            self::MODE_CFB => 'SM4-CFB',
+            self::MODE_OFB => 'SM4-OFB',
+            self::MODE_CTR => 'SM4-CTR',
+            default => throw new InvalidKeyException('Unsupported SM4 mode: ' . $mode),
+        };
     }
 
     private static function validateHexKey(string $hex, string $label = 'Key'): void
     {
         if (!preg_match('/^[0-9a-fA-F]{32}$/', $hex)) {
-            $msg = $label === 'IV' ? 'CBC mode requires IV' : 'Key must be 128 bits (32 hex chars)';
+            $msg = $label === 'IV' ? 'IV must be 128 bits (32 hex chars)' : 'Key must be 128 bits (32 hex chars)';
             throw new InvalidKeyException($msg);
         }
     }
@@ -143,10 +336,18 @@ class Sm4 implements CipherInterface
             }
             return $data;
         }
+
         $block = 16;
         $remainder = strlen($data) % $block;
-        $pad = $remainder === 0 ? $block : $block - $remainder;
-        return $data . str_repeat(chr($pad), $pad);
+        $padLen = $remainder === 0 ? $block : $block - $remainder;
+
+        return match ($padding) {
+            'pkcs5', 'pkcs7' => $data . str_repeat(chr($padLen), $padLen),
+            'zero' => $data . str_repeat("\0", $padLen),
+            'iso10126' => $data . ($padLen > 1 ? random_bytes($padLen - 1) : '') . chr($padLen),
+            'ansix923' => $data . str_repeat("\0", $padLen - 1) . chr($padLen),
+            default => throw new InvalidKeyException('Unsupported padding: ' . $padding),
+        };
     }
 
     private static function maybeUnpad(string $data, string $padding): string
@@ -158,10 +359,35 @@ class Sm4 implements CipherInterface
         if ($len === 0 || $len % 16 !== 0) {
             throw new InvalidKeyException('Invalid padded plaintext');
         }
-        $pad = ord($data[$len - 1]);
-        if ($pad < 1 || $pad > 16 || substr($data, -$pad) !== str_repeat(chr($pad), $pad)) {
-            throw new InvalidKeyException('Invalid PKCS padding');
+
+        if ($padding === 'zero') {
+            // Zero padding: trim trailing zero bytes (note: cannot distinguish from data that ends with \0)
+            return rtrim($data, "\0");
         }
+
+        // PKCS5/PKCS7, ISO 10126, ANSI X9.23 — all use last byte as pad length
+        $pad = ord($data[$len - 1]);
+
+        if ($padding === 'pkcs5' || $padding === 'pkcs7') {
+            if ($pad < 1 || $pad > 16 || substr($data, -$pad) !== str_repeat(chr($pad), $pad)) {
+                throw new InvalidKeyException('Invalid PKCS padding');
+            }
+        } elseif ($padding === 'ansix923') {
+            if ($pad < 1 || $pad > 16) {
+                throw new InvalidKeyException('Invalid ANSI X9.23 padding');
+            }
+            // All pad bytes except the last must be zero
+            $padBytes = substr($data, -$pad, $pad - 1);
+            if ($padBytes !== str_repeat("\0", $pad - 1)) {
+                throw new InvalidKeyException('Invalid ANSI X9.23 padding');
+            }
+        } else {
+            // ISO 10126: random pad bytes, only verify the last byte
+            if ($pad < 1 || $pad > 16) {
+                throw new InvalidKeyException('Invalid ISO 10126 padding');
+            }
+        }
+
         return substr($data, 0, $len - $pad);
     }
 }
