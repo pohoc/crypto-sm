@@ -42,7 +42,7 @@ class Hex
      */
     public static function toHex(array $bytes): string
     {
-        return bin2hex(implode('', array_map('chr', $bytes)));
+        return bin2hex(implode('', array_map(static fn (int $b): string => chr($b & 0xFF), $bytes)));
     }
 
     /**

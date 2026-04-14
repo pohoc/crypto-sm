@@ -365,7 +365,7 @@ class Pem
     private static function encodeDerLength(int $len): string
     {
         if ($len < 128) {
-            return chr($len);
+            return chr($len & 0xFF);
         }
         $bytes = '';
         $temp = $len;
@@ -373,7 +373,7 @@ class Pem
             $bytes = chr($temp & 0xFF) . $bytes;
             $temp >>= 8;
         } while ($temp > 0);
-        return chr(0x80 | strlen($bytes)) . $bytes;
+        return chr((0x80 | strlen($bytes)) & 0xFF) . $bytes;
     }
 
     /**
@@ -386,7 +386,7 @@ class Pem
         for ($i = 2, $count = count($parts); $i < $count; $i++) {
             $bytes = array_merge($bytes, self::encodeOidComponent($parts[$i]));
         }
-        $content = implode('', array_map('chr', $bytes));
+        $content = implode('', array_map(static fn (int $b): string => chr($b & 0xFF), $bytes));
         return "\x06" . self::encodeDerLength(strlen($content)) . $content;
     }
 

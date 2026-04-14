@@ -105,7 +105,7 @@ class Asn1
     private static function encodeLength(int $len): string
     {
         if ($len < 128) {
-            return chr($len);
+            return chr($len & 0xFF);
         }
 
         $lenBytes = '';
@@ -115,7 +115,7 @@ class Asn1
             $temp >>= 8;
         } while ($temp > 0);
 
-        return chr(0x80 | strlen($lenBytes)) . $lenBytes;
+        return chr((0x80 | strlen($lenBytes)) & 0xFF) . $lenBytes;
     }
 
     /**
