@@ -11,6 +11,7 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    needs: [ci]
 
     steps:
       - uses: actions/checkout@v4
@@ -71,3 +72,6 @@ jobs:
           body: ${{ steps.changelog.outputs.CHANGELOG }}
           draft: false
           prerelease: false
+
+  ci:
+    uses: ./.github/workflows/php.yml

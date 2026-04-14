@@ -198,6 +198,9 @@ class NewFeatureTest extends TestCase
         return [[bin2hex(random_bytes(16))]];
     }
 
+    /**
+     * @dataProvider sm4KeyProvider
+     */
     #[DataProvider('sm4KeyProvider')]
     public function testSm4CfbRoundTrip(string $key): void
     {
@@ -209,6 +212,9 @@ class NewFeatureTest extends TestCase
         $this->assertEquals($data, $decrypted);
     }
 
+    /**
+     * @dataProvider sm4KeyProvider
+     */
     #[DataProvider('sm4KeyProvider')]
     public function testSm4OfbRoundTrip(string $key): void
     {
@@ -220,6 +226,9 @@ class NewFeatureTest extends TestCase
         $this->assertEquals($data, $decrypted);
     }
 
+    /**
+     * @dataProvider sm4KeyProvider
+     */
     #[DataProvider('sm4KeyProvider')]
     public function testSm4CtrRoundTrip(string $key): void
     {

@@ -137,6 +137,8 @@ class Sm3Test extends TestCase
 
     /**
      * GB/T 32905-2016 标准测试向量: SM3(0x61 重复 1000000 次)
+     *
+     * @group slow
      */
     #[Group('slow')]
     public function testSm3StandardVectorMillionChars(): void
