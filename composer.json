@@ -25,14 +25,14 @@
     "source": "https://github.com/pohoc/crypto-sm"
   },
   "require": {
-    "php": "^8.0|^8.1|^8.2|^8.3|^8.4|^8.5",
+    "php": "^8.0",
     "ext-gmp": "*",
     "ext-openssl": "*"
   },
   "require-dev": {
     "php-cs-fixer/shim": "^3.94",
     "phpstan/phpstan": "^2.1",
-    "phpunit/phpunit": "^9.0|^10.0|^11.0"
+    "phpunit/phpunit": "^11.0"
   },
   "scripts": {
     "test": "phpunit",

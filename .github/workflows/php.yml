@@ -8,10 +8,12 @@ on:
 
 jobs:
   test:
+    name: Test (PHP ${{ matrix.php-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     strategy:
+      fail-fast: false
       matrix:
         php-version: ['8.0', '8.1', '8.2', '8.3', '8.4', '8.5']
 
@@ -35,6 +37,7 @@ jobs:
         run: vendor/bin/phpunit
 
   analyse:
+    name: Static Analysis
     runs-on: ubuntu-latest
 
     steps:
@@ -43,15 +46,34 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.4'
+          php-version: '8.5'
           extensions: gmp, openssl
           tools: phpstan, php-cs-fixer
 
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist
 
-      - name: PHPStan
+      - name: PHPStan (level 8)
         run: phpstan analyse
 
-      - name: PHP-CS-Fixer
+      - name: PHP-CS-Fixer (PSR-12)
         run: php-cs-fixer fix --dry-run --diff
+
+  security:
+    name: Security Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          extensions: gmp, openssl
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Composer audit
+        run: composer audit

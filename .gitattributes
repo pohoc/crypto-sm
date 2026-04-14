@@ -1,0 +1,24 @@
+# Auto detect text files and perform LF normalization
+* text=auto eol=lf
+
+# PHP files
+*.php text diff=php
+*.neon text
+
+# Config files
+*.json text
+*.xml text
+*.yml text
+*.yaml text
+
+# Markdown / docs
+*.md text
+
+# Shell scripts
+*.sh text eol=lf
+
+# Binary files
+*.ico binary
+*.png binary
+*.jpg binary
+*.gif binary
