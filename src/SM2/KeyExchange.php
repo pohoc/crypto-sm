@@ -184,14 +184,14 @@ class KeyExchange
     /**
      * Core key derivation per GM/T 0003-2012 Section 6.
      *
-     * @param string $d           Own static private key
-     * @param string $r           Own ephemeral private key
-     * @param string $P_other     Other party's static public key
-     * @param string $R_other     Other party's ephemeral public key
-     * @param int    $klen        Key length in bytes
-     * @param string $ida         Initiator's ID
-     * @param string $idb         Responder's ID
-     * @param bool   $isInitiator Whether computing on initiator side
+     * @param  string                                     $d           Own static private key
+     * @param  string                                     $r           Own ephemeral private key
+     * @param  string                                     $P_other     Other party's static public key
+     * @param  string                                     $R_other     Other party's ephemeral public key
+     * @param  int                                        $klen        Key length in bytes
+     * @param  string                                     $ida         Initiator's ID
+     * @param  string                                     $idb         Responder's ID
+     * @param  bool                                       $isInitiator Whether computing on initiator side
      * @return array{key: string, xV: string, yV: string}
      */
     private static function computeKey(

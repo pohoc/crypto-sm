@@ -299,7 +299,7 @@ class Gcm
      * Each layer is built by applying gfMulX8 to the previous layer.
      * Total: 16 * 256 = 4096 GMP objects, ~128KB memory.
      *
-     * @param array<int, \GMP> $table The 8-bit H table
+     * @param  array<int, \GMP>             $table The 8-bit H table
      * @return array<int, array<int, \GMP>>
      */
     private static function buildLayerTable(array $table): array
