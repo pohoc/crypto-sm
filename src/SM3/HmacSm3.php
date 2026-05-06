@@ -89,7 +89,10 @@ class HmacSm3
     /**
      * Finalize the streaming HMAC and return the result.
      *
-     * Uses OpenSSL acceleration when available (via Sm3::finalize).
+     * After finalization, the instance is reset to its initial state (with the
+     * same key), allowing additional data to be fed and finalized again.
+     * This is useful for computing multiple HMACs with the same key without
+     * creating a new instance.
      *
      * @return string 64-character hex string (256-bit HMAC)
      */

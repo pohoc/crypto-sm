@@ -60,27 +60,29 @@ class Sm3 implements HashInterface
 
     // ─── Streaming API ────────────────────────────────────────────────────
 
+    /** @var bool Whether OpenSSL SM3 is available (cached per instance) */
+    private bool $openSslAvailable;
+
     /** @var string Buffered data for streaming (concatenated, processed on finalize) */
     private string $buffer = '';
+
+    /** @var string All data ever fed (for OpenSSL one-shot hashing in finalize) */
+    private string $allData = '';
 
     /** @var int Total number of bytes processed */
     private int $totalLen = 0;
 
-    /** @var bool Whether to use OpenSSL acceleration for finalize */
-    private bool $useOpenSSL;
+    /** @var array<int,int> Pure PHP state (8 x 32-bit words) */
+    private array $state;
 
-    /** @var array<int,int>|null Pure PHP state (8 x 32-bit words), used only when OpenSSL unavailable */
-    private ?array $state = null;
-
-    /**
-     * Create a new SM3 streaming hasher instance.
-     */
     public function __construct()
     {
-        $this->useOpenSSL = self::isOpenSSLAvailable();
-        if (!$this->useOpenSSL) {
-            $this->state = self::IV;
+        $this->state = self::IV;
+        if (self::$openSslSm3Available === null) {
+            self::$openSslSm3Available = function_exists('openssl_digest')
+                && in_array('sm3', openssl_get_md_methods(), true);
         }
+        $this->openSslAvailable = self::$openSslSm3Available;
     }
 
     /**
@@ -91,11 +93,11 @@ class Sm3 implements HashInterface
      */
     public function update(string $data): self
     {
-        $this->buffer .= $data;
+        $this->allData .= $data;
         $this->totalLen += strlen($data);
 
-        // When not using OpenSSL, process complete blocks incrementally
-        if (!$this->useOpenSSL && $this->state !== null) {
+        if (!$this->openSslAvailable) {
+            $this->buffer .= $data;
             while (strlen($this->buffer) >= 64) {
                 $block = substr($this->buffer, 0, 64);
                 $this->buffer = substr($this->buffer, 64);
@@ -116,18 +118,25 @@ class Sm3 implements HashInterface
      */
     public function finalize(): string
     {
-        $result = $this->useOpenSSL
-            ? self::computeHash($this->buffer)
-            : $this->finalizePure();
-
-        // Reset state for potential reuse
-        $this->buffer = '';
-        $this->totalLen = 0;
-        if (!$this->useOpenSSL) {
-            $this->state = self::IV;
+        if ($this->openSslAvailable) {
+            $result = openssl_digest($this->allData, 'sm3');
+            if ($result !== false) {
+                $this->reset();
+                return $result;
+            }
         }
 
+        $result = $this->finalizePure();
+        $this->reset();
         return $result;
+    }
+
+    private function reset(): void
+    {
+        $this->buffer = '';
+        $this->allData = '';
+        $this->totalLen = 0;
+        $this->state = self::IV;
     }
 
     /**
@@ -135,12 +144,6 @@ class Sm3 implements HashInterface
      */
     private function finalizePure(): string
     {
-        // If state is null (shouldn't happen, but be safe), fallback to computeHashPure
-        if ($this->state === null) {
-            return self::computeHashPure($this->buffer);
-        }
-
-        // Pad the remaining buffer
         $msg = $this->buffer;
         $len = strlen($msg);
         $bitLen = $this->totalLen * 8;
@@ -152,7 +155,6 @@ class Sm3 implements HashInterface
         }
         $msg .= pack('N2', $bitLen >> 32, $bitLen & 0xFFFFFFFF);
 
-        // Process remaining blocks
         $blocks = str_split($msg, 64);
         $v = $this->state;
         foreach ($blocks as $block) {
@@ -160,18 +162,6 @@ class Sm3 implements HashInterface
         }
 
         return sprintf('%08x%08x%08x%08x%08x%08x%08x%08x', ...$v);
-    }
-
-    /**
-     * Check if OpenSSL SM3 is available (cached).
-     */
-    private static function isOpenSSLAvailable(): bool
-    {
-        if (self::$openSslSm3Available === null) {
-            self::$openSslSm3Available = function_exists('openssl_digest')
-                && in_array('sm3', openssl_get_md_methods(), true);
-        }
-        return self::$openSslSm3Available;
     }
 
     /**
