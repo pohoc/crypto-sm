@@ -432,11 +432,7 @@ class Gcm
         for ($i = 0; $i < 16; $i++) {
             $reflected[$i] = chr(self::reverseByte(ord($bytes[$i])) & 0xFF);
         }
-        $imported = gmp_import($reflected, 1, GMP_MSW_FIRST | GMP_BIG_ENDIAN);
-        if ($imported === false) {
-            return gmp_init(0);
-        }
-        return $imported;
+        return gmp_import($reflected, 1, GMP_MSW_FIRST | GMP_BIG_ENDIAN);
     }
 
     private static function gmpToBytes(\GMP $value): string
