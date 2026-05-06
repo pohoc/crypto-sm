@@ -430,9 +430,13 @@ class Gcm
     {
         $reflected = str_repeat("\x00", 16);
         for ($i = 0; $i < 16; $i++) {
-            $reflected[$i] = chr(self::reverseByte(ord($bytes[$i])));
+            $reflected[$i] = chr(self::reverseByte(ord($bytes[$i])) & 0xFF);
         }
-        return gmp_import($reflected, 1, GMP_MSW_FIRST | GMP_BIG_ENDIAN) ?: gmp_init(0);
+        $imported = gmp_import($reflected, 1, GMP_MSW_FIRST | GMP_BIG_ENDIAN);
+        if ($imported === false) {
+            return gmp_init(0);
+        }
+        return $imported;
     }
 
     private static function gmpToBytes(\GMP $value): string
@@ -449,11 +453,15 @@ class Gcm
         }
         $result = str_repeat("\x00", 16);
         for ($i = 0; $i < 16; $i++) {
-            $result[$i] = chr(self::reverseByte(ord($raw[$i])));
+            $result[$i] = chr(self::reverseByte(ord($raw[$i])) & 0xFF);
         }
         return $result;
     }
 
+    /**
+     * @param  int<0, 255> $byte
+     * @return int<0, 255>
+     */
     private static function reverseByte(int $byte): int
     {
         static $table = null;

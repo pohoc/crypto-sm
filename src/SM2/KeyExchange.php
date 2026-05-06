@@ -164,7 +164,7 @@ class KeyExchange
         string $RA,
         string $RB
     ): string {
-        $prefixByte = chr($prefix);
+        $prefixByte = chr(self::toByte($prefix));
         $entla = self::encodeEntl($ida);
         $entlb = self::encodeEntl($idb);
         $xRA = substr($RA, 0, 64);
@@ -179,6 +179,17 @@ class KeyExchange
 
         $outerInput = $prefixByte . Hex::fromHex($yV) . Hex::fromHex($innerHash);
         return Sm3::sm3($outerInput);
+    }
+
+    /**
+     * @return int<0, 255>
+     */
+    private static function toByte(int $value): int
+    {
+        if ($value < 0 || $value > 255) {
+            throw new \InvalidArgumentException('Value must be in byte range 0..255.');
+        }
+        return $value;
     }
 
     /**
