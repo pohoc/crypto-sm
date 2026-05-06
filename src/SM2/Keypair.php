@@ -7,7 +7,7 @@ namespace CryptoSm\SM2;
 /**
  * Represents an SM2 key pair.
  */
-class Keypair
+class Keypair implements \JsonSerializable
 {
     private string $privateKey;
     private string $publicKey;
@@ -40,5 +40,18 @@ class Keypair
     public function getPublicKey(): string
     {
         return $this->publicKey;
+    }
+
+    public function __toString(): string
+    {
+        return $this->privateKey . $this->publicKey;
+    }
+
+    /**
+     * @return array{privateKey: string, publicKey: string}
+     */
+    public function jsonSerialize(): array
+    {
+        return ['privateKey' => $this->privateKey, 'publicKey' => $this->publicKey];
     }
 }

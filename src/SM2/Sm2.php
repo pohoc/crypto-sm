@@ -33,8 +33,11 @@ class Sm2 implements SignerInterface, CipherInterface
     /** @var array<string, \GMP>|null Cached GMP objects for curve parameters */
     private static ?array $gmpCache = null;
 
-    /** @var array<int, array{x: \GMP, y: \GMP}>|null Precomputed base point table for fixed-base multiplication */
+    /** @var array<int, array{x: \GMP, y: \GMP}>|null Precomputed base point table for fixed-base multiplication (8-bit window: i*G for i=1..255) */
     private static ?array $basePointTable = null;
+
+    /** @var array<string, array<int, array{x: \GMP, y: \GMP}>>|null Cached variable-base multiplication tables, keyed by point hex */
+    private static ?array $windowTableCache = null;
 
     private static function gmpParam(string $key): \GMP
     {
@@ -50,7 +53,7 @@ class Sm2 implements SignerInterface, CipherInterface
     /**
      * Build a precomputed table for fixed-base point multiplication (base point G).
      *
-     * Uses 4-bit window: precomputes i*G for i = 1..15.
+     * Uses 8-bit window: precomputes i*G for i = 1..255.
      * This avoids recomputing these points on every key generation / signature.
      *
      * @return array<int, array{x: \GMP, y: \GMP}>
@@ -67,14 +70,11 @@ class Sm2 implements SignerInterface, CipherInterface
         $Gy = self::gmpParam('gY');
 
         $table = [];
-        // 1*G
         $table[1] = ['x' => $Gx, 'y' => $Gy];
-        // Compute 2*G, 3*G, ... 15*G iteratively
-        for ($i = 2; $i <= 15; $i++) {
+        for ($i = 2; $i <= 255; $i++) {
             $prev = $table[$i - 1];
             $sum = self::pointAdd($prev['x'], $prev['y'], $Gx, $Gy, $p, $a);
             if ($sum === null) {
-                // Fallback: should never happen for valid curve
                 break;
             }
             $table[$i] = $sum;
@@ -149,24 +149,16 @@ class Sm2 implements SignerInterface, CipherInterface
     public static function generateKeyPairHex(): Keypair
     {
         $pair = self::generateKeyPair();
-        $publicKey = $pair['publicKey'];
-        if ($publicKey === null) {
-            throw new CryptoException('SM2 key generation failed: point multiplication error');
-        }
-        return new Keypair($pair['privateKey'], $publicKey);
+        return new Keypair($pair['privateKey'], $pair['publicKey']);
     }
 
-    /** @return array{privateKey: string, publicKey: string|null} */
+    /** @return array{privateKey: string, publicKey: string} */
     private static function generateKeyPair(): array
     {
         $n = self::gmpParam('n');
-        do {
-            $d = gmp_random_range(gmp_init(1), gmp_sub($n, gmp_init(1)));
-        } while (gmp_cmp($d, 1) < 0 || gmp_cmp($d, $n) >= 0);
-
+        $d = gmp_random_range(gmp_init(1), gmp_sub($n, gmp_init(1)));
         $privateKey = str_pad(gmp_strval($d, 16), 64, '0', STR_PAD_LEFT);
         $publicKey = self::pointMultiply($privateKey);
-
         return ['privateKey' => $privateKey, 'publicKey' => $publicKey];
     }
 
@@ -193,10 +185,8 @@ class Sm2 implements SignerInterface, CipherInterface
         $n = self::gmpParam('n');
 
         // GM/T 0003-2012 5.4.2: k must be in [1, n-1]
-        do {
-            $k = bin2hex(random_bytes(32));
-            $kGmp = gmp_init($k, 16);
-        } while (gmp_cmp($kGmp, 1) < 0 || gmp_cmp($kGmp, $n) >= 0);
+        $kGmp = gmp_random_range(gmp_init(1), gmp_sub($n, gmp_init(1)));
+        $k = str_pad(gmp_strval($kGmp, 16), 64, '0', STR_PAD_LEFT);
 
         $x1y1 = self::pointMultiply($k);
         $x1 = substr($x1y1, 0, 64);
@@ -216,10 +206,8 @@ class Sm2 implements SignerInterface, CipherInterface
                 if ($retry >= $maxRetries) {
                     throw new CryptoException('SM2 encryption failed: KDF derived all-zero key after max retries');
                 }
-                do {
-                    $k = bin2hex(random_bytes(32));
-                    $kGmp = gmp_init($k, 16);
-                } while (gmp_cmp($kGmp, 1) < 0 || gmp_cmp($kGmp, $n) >= 0);
+                $kGmp = gmp_random_range(gmp_init(1), gmp_sub($n, gmp_init(1)));
+                $k = str_pad(gmp_strval($kGmp, 16), 64, '0', STR_PAD_LEFT);
                 $x1y1 = self::pointMultiply($k);
                 $x1 = substr($x1y1, 0, 64);
                 $C1 = $x1y1;
@@ -253,6 +241,14 @@ class Sm2 implements SignerInterface, CipherInterface
 
         $options ??= new Sm2CipherOptions();
         $cipherMode = $options->getCipherMode();
+
+        if (strlen($data) > 2 && substr($data, 0, 2) === '04' && (strlen($data) - 2) >= 192 && (strlen($data) - 2) % 2 === 0) {
+            $stripped = substr($data, 2);
+            $testC1 = substr($stripped, 0, 128);
+            if (self::isOnCurve($testC1)) {
+                $data = $stripped;
+            }
+        }
 
         if (strlen($data) < 192 || strlen($data) % 2 !== 0) {
             throw new InvalidKeyException('Invalid ciphertext');
@@ -367,7 +363,10 @@ class Sm2 implements SignerInterface, CipherInterface
 
         self::validatePrivateKey($privateKey);
 
-        $e = self::calcE($data, $hash, $publicKey !== '' ? $publicKey : self::pointMultiply($privateKey), $userId);
+        if ($hash && $publicKey === '') {
+            $publicKey = self::getPublicKey($privateKey);
+        }
+        $e = self::calcE($data, $hash, $publicKey, $userId);
 
         $n = self::gmpParam('n');
         $d = gmp_init($privateKey, 16);
@@ -381,19 +380,18 @@ class Sm2 implements SignerInterface, CipherInterface
         }
 
         $maxRetries = 100;
-        $retry = 0;
-        $s = gmp_init(0);
-        $r = gmp_init(0);
-        do {
-            $k = gmp_random_range(gmp_init(1), gmp_sub($n, gmp_init(1)));
-            // Use internal method to avoid str↔GMP round-trip
-            $x1y1 = self::fixedBaseMultiply($k, self::gmpParam('p'), self::gmpParam('a'));
+        $p = self::gmpParam('p');
+        $a = self::gmpParam('a');
+        $nMinus1 = gmp_sub($n, gmp_init(1));
+
+        for ($retry = 0; $retry < $maxRetries; $retry++) {
+            $k = gmp_random_range(gmp_init(1), $nMinus1);
+            $x1y1 = self::fixedBaseMultiply($k, $p, $a);
             if ($x1y1 === null) {
                 continue;
             }
             $x1Dec = $x1y1['x'];
 
-            // GM/T 0003-2012 5.2.2: x1' = x1 mod n (take modulo, do NOT regenerate k)
             if (gmp_cmp($x1Dec, $n) >= 0) {
                 $x1Dec = gmp_mod($x1Dec, $n);
             }
@@ -405,17 +403,14 @@ class Sm2 implements SignerInterface, CipherInterface
 
             $tmp = gmp_mod(gmp_sub($k, gmp_mul($r, $d)), $n);
             $s = gmp_mod(gmp_mul($dPlus1Inv, $tmp), $n);
-
-            $retry++;
-            if ($retry >= $maxRetries) {
-                throw new CryptoException('SM2 signature failed: max retries exceeded');
+            if (gmp_cmp($s, 0) !== 0) {
+                $rHex = str_pad(gmp_strval($r, 16), 64, '0', STR_PAD_LEFT);
+                $sHex = str_pad(gmp_strval($s, 16), 64, '0', STR_PAD_LEFT);
+                return $der ? Asn1::encodeDerSignature($rHex, $sHex) : $rHex . $sHex;
             }
-        } while (gmp_cmp($s, 0) === 0);
+        }
 
-        $rHex = str_pad(gmp_strval($r, 16), 64, '0', STR_PAD_LEFT);
-        $sHex = str_pad(gmp_strval($s, 16), 64, '0', STR_PAD_LEFT);
-
-        return $der ? Asn1::encodeDerSignature($rHex, $sHex) : $rHex . $sHex;
+        throw new CryptoException('SM2 signature failed: max retries exceeded');
     }
 
     /**
@@ -438,8 +433,7 @@ class Sm2 implements SignerInterface, CipherInterface
             return false;
         }
 
-        // 自动检测 DER：签名以 0x30 (SEQUENCE tag) 开头且长度不等于 128（plain signature 固定 128 hex chars）
-        if (!$der && strlen($signature) !== 128) {
+        if (!$der && strlen($signature) !== 128 && strlen($signature) > 4 && substr($signature, 0, 2) === '30') {
             $der = true;
         }
 
@@ -484,7 +478,7 @@ class Sm2 implements SignerInterface, CipherInterface
         }
 
         $v = gmp_mod(gmp_add($e, $sum['x']), $n);
-        return gmp_cmp($v, $x1Dec) === 0;
+        return hash_equals(str_pad(gmp_strval($v, 16), 64, '0', STR_PAD_LEFT), str_pad(gmp_strval($x1Dec, 16), 64, '0', STR_PAD_LEFT));
     }
 
     private static function calcE(string $data, bool $hash, string $publicKey, string $userId): \GMP
@@ -492,11 +486,12 @@ class Sm2 implements SignerInterface, CipherInterface
         if ($hash) {
             $x = substr($publicKey, 0, 64);
             $y = substr($publicKey, 64);
-            $z = Sm3::sm3(self::getUserIdHash($userId, $x, $y));
-            $dataHex = empty($data) ? '00' : $z . bin2hex($data);
-            return gmp_init($dataHex, 16);
+            $zInput = self::getUserIdHash($userId, $x, $y);
+            $z = Sm3::sm3(Hex::fromHex($zInput));
+            $e = Sm3::sm3(Hex::fromHex($z) . $data);
+            return gmp_init($e, 16);
         }
-        $dataHex = empty($data) ? '00' : bin2hex($data);
+        $dataHex = $data === '' ? '00' : bin2hex($data);
         return gmp_init($dataHex, 16);
     }
 
@@ -510,12 +505,7 @@ class Sm2 implements SignerInterface, CipherInterface
         $gX = self::$eccTable['gX'];
         $gY = self::$eccTable['gY'];
 
-        return $userIdHex . self::intToHex($len) . $a . $b . $gX . $gY . $x . $y;
-    }
-
-    private static function intToHex(int $n): string
-    {
-        return str_pad(dechex($n), 8, '0', STR_PAD_LEFT);
+        return sprintf('%04x', $len) . $userIdHex . $a . $b . $gX . $gY . $x . $y;
     }
 
     private static function kdf(string $seed, int $keyLen): string
@@ -527,7 +517,7 @@ class Sm2 implements SignerInterface, CipherInterface
             if ($ct > $maxCt) {
                 throw new CryptoException('KDF counter overflow: key length too large');
             }
-            $hash = Sm3::sm3(Hex::fromHex($seed . self::intToHex($ct)));
+            $hash = Sm3::sm3(Hex::fromHex($seed . sprintf('%08x', $ct)));
             $key .= Hex::fromHex($hash);
             $ct++;
         }
@@ -538,7 +528,7 @@ class Sm2 implements SignerInterface, CipherInterface
     {
         $result = self::pointMultiplyInternal($point, $factor);
         if ($result === null) {
-            return str_repeat('0', 128);
+            throw new CryptoException('SM2 point multiplication failed');
         }
         return str_pad(gmp_strval($result['x'], 16), 64, '0', STR_PAD_LEFT) .
             str_pad(gmp_strval($result['y'], 16), 64, '0', STR_PAD_LEFT);
@@ -574,21 +564,19 @@ class Sm2 implements SignerInterface, CipherInterface
             throw new CryptoException('Signature factor must be in range [1, n-1]');
         }
 
-        // For base point multiplication, use precomputed table with 4-bit window
         if ($isBasePoint) {
             return self::fixedBaseMultiply($factorDec, $p, $a);
         }
 
-        // Variable-base multiplication with 4-bit window
         return self::windowMultiply($pointX, $pointY, $factorDec, $p, $a);
     }
 
     /**
-     * Fixed-base multiplication using precomputed table (4-bit window).
+     * Fixed-base multiplication using precomputed table (8-bit window).
      *
-     * For base point G, we precompute i*G for i=1..15.
-     * The scalar is processed 4 bits at a time from the most significant bit,
-     * reducing point additions from ~128 (binary method) to ~64.
+     * For base point G, we precompute i*G for i=1..255.
+     * The scalar is processed 8 bits at a time from the most significant bit,
+     * reducing point additions from ~128 (binary method) to ~32.
      *
      * @return array{x: \GMP, y: \GMP}|null
      */
@@ -602,33 +590,26 @@ class Sm2 implements SignerInterface, CipherInterface
             return null;
         }
 
-        // Convert to binary string for window processing
         $bin = gmp_strval($k, 2);
         $len = strlen($bin);
 
-        // Pad to multiple of 4
-        $padLen = (4 - ($len % 4)) % 4;
+        $padLen = (8 - ($len % 8)) % 8;
         $bin = str_repeat('0', $padLen) . $bin;
         $len = strlen($bin);
 
-        /** @var \GMP|null $resultX */
         $resultX = null;
-        /** @var \GMP|null $resultY */
         $resultY = null;
 
-        // Process 4-bit windows from MSB to LSB
-        for ($i = 0; $i < $len; $i += 4) {
-            // Double 4 times
+        for ($i = 0; $i < $len; $i += 8) {
             if ($resultX !== null && $resultY !== null) {
-                for ($d = 0; $d < 4; $d++) {
+                for ($d = 0; $d < 8; $d++) {
                     $temp = self::pointDouble($resultX, $resultY, $p, $a);
                     $resultX = $temp['x'];
                     $resultY = $temp['y'];
                 }
             }
 
-            // Extract 4-bit window value
-            $windowVal = (int) bindec(substr($bin, $i, 4));
+            $windowVal = (int) bindec(substr($bin, $i, 8));
             if ($windowVal === 0) {
                 continue;
             }
@@ -660,10 +641,10 @@ class Sm2 implements SignerInterface, CipherInterface
     }
 
     /**
-     * Variable-base multiplication using 4-bit window method.
+     * Variable-base multiplication using 8-bit window method.
      *
-     * Precomputes i*P for i=1..15 on the fly, then processes
-     * the scalar 4 bits at a time from MSB.
+     * Precomputes i*P for i=1..255 on the fly, then processes
+     * the scalar 8 bits at a time from MSB.
      *
      * @return array{x: \GMP, y: \GMP}|null
      */
@@ -676,45 +657,53 @@ class Sm2 implements SignerInterface, CipherInterface
             return null;
         }
 
-        // Build precomputed table for this point: i*P for i=1..15
-        $table = [];
-        $table[1] = ['x' => $px, 'y' => $py];
-        for ($i = 2; $i <= 15; $i++) {
-            $prev = $table[$i - 1];
-            $sum = self::pointAdd($prev['x'], $prev['y'], $px, $py, $p, $a);
-            if ($sum === null) {
-                break;
-            }
-            $table[$i] = $sum;
+        $cacheKey = str_pad(gmp_strval($px, 16), 64, '0', STR_PAD_LEFT) . str_pad(gmp_strval($py, 16), 64, '0', STR_PAD_LEFT);
+
+        if (self::$windowTableCache === null) {
+            self::$windowTableCache = [];
         }
 
-        // Convert to binary string for window processing
+        if (!isset(self::$windowTableCache[$cacheKey])) {
+            $table = [];
+            $table[1] = ['x' => $px, 'y' => $py];
+            for ($i = 2; $i <= 255; $i++) {
+                $prev = $table[$i - 1];
+                $sum = self::pointAdd($prev['x'], $prev['y'], $px, $py, $p, $a);
+                if ($sum === null) {
+                    break;
+                }
+                $table[$i] = $sum;
+            }
+
+            if (count(self::$windowTableCache) > 16) {
+                array_shift(self::$windowTableCache);
+            }
+
+            self::$windowTableCache[$cacheKey] = $table;
+        }
+
+        $table = self::$windowTableCache[$cacheKey];
+
         $bin = gmp_strval($k, 2);
         $len = strlen($bin);
 
-        // Pad to multiple of 4
-        $padLen = (4 - ($len % 4)) % 4;
+        $padLen = (8 - ($len % 8)) % 8;
         $bin = str_repeat('0', $padLen) . $bin;
         $len = strlen($bin);
 
-        /** @var \GMP|null $resultX */
         $resultX = null;
-        /** @var \GMP|null $resultY */
         $resultY = null;
 
-        // Process 4-bit windows from MSB to LSB
-        for ($i = 0; $i < $len; $i += 4) {
-            // Double 4 times
+        for ($i = 0; $i < $len; $i += 8) {
             if ($resultX !== null && $resultY !== null) {
-                for ($d = 0; $d < 4; $d++) {
+                for ($d = 0; $d < 8; $d++) {
                     $temp = self::pointDouble($resultX, $resultY, $p, $a);
                     $resultX = $temp['x'];
                     $resultY = $temp['y'];
                 }
             }
 
-            // Extract 4-bit window value
-            $windowVal = (int) bindec(substr($bin, $i, 4));
+            $windowVal = (int) bindec(substr($bin, $i, 8));
             if ($windowVal === 0) {
                 continue;
             }
@@ -807,6 +796,7 @@ class Sm2 implements SignerInterface, CipherInterface
     /**
      * Get a GMP curve parameter by key (public accessor for KeyExchange).
      *
+     * @internal For internal use by KeyExchange only. Not covered by backward compatibility.
      * @return \GMP
      */
     public static function gmpParamPublic(string $key): \GMP
@@ -817,18 +807,23 @@ class Sm2 implements SignerInterface, CipherInterface
     /**
      * Point multiplication returning hex string (public accessor for KeyExchange).
      *
+     * @internal For internal use by KeyExchange only. Not covered by backward compatibility.
      * @param  string      $point  128-char hex point or scalar (for base point)
      * @param  string|null $factor 64-char hex scalar (optional)
      * @return string      128-char hex result point
      */
     public static function pointMultiplyPublic(string $point, ?string $factor = null): string
     {
+        if (strlen($point) === 128 && !self::isOnCurve($point)) {
+            throw new InvalidKeyException('Invalid point: not on SM2 curve');
+        }
         return self::pointMultiply($point, $factor);
     }
 
     /**
      * Point addition returning hex string (public accessor for KeyExchange).
      *
+     * @internal For internal use by KeyExchange only. Not covered by backward compatibility.
      * @param  string      $point1Hex 128-char hex point
      * @param  string      $point2Hex 128-char hex point
      * @return string|null 128-char hex result point, or null if points cancel

@@ -63,7 +63,7 @@ class KeyExchange
         string $ida = '1234567812345678',
         string $idb = '1234567812345678'
     ): string {
-        return self::computeKey($dA, $rA, $PB, $RB, $klen, $ida, $idb, true);
+        return self::computeKey($dA, $rA, $PB, $RB, $klen, $ida, $idb, true)['key'];
     }
 
     /**
@@ -94,7 +94,91 @@ class KeyExchange
         string $ida = '1234567812345678',
         string $idb = '1234567812345678'
     ): string {
+        return self::computeKey($dB, $rB, $PA, $RA, $klen, $ida, $idb, false)['key'];
+    }
+
+    /**
+     * Compute the shared secret key with V point coordinates (initiator side).
+     *
+     * Returns the derived key and V point coordinates for optional key confirmation.
+     *
+     * @return array{key: string, xV: string, yV: string}
+     */
+    public static function initiatorComputeKeyFull(
+        string $dA,
+        string $rA,
+        string $PB,
+        string $RB,
+        int $klen,
+        string $ida = '1234567812345678',
+        string $idb = '1234567812345678'
+    ): array {
+        return self::computeKey($dA, $rA, $PB, $RB, $klen, $ida, $idb, true);
+    }
+
+    /**
+     * Compute the shared secret key with V point coordinates (responder side).
+     *
+     * @return array{key: string, xV: string, yV: string}
+     */
+    public static function responderComputeKeyFull(
+        string $dB,
+        string $rB,
+        string $PA,
+        string $RA,
+        int $klen,
+        string $ida = '1234567812345678',
+        string $idb = '1234567812345678'
+    ): array {
         return self::computeKey($dB, $rB, $PA, $RA, $klen, $ida, $idb, false);
+    }
+
+    public static function computeInitiatorConfirmation(
+        string $xV,
+        string $yV,
+        string $ida,
+        string $idb,
+        string $RA,
+        string $RB
+    ): string {
+        return self::computeConfirmation(0x02, $xV, $yV, $ida, $idb, $RA, $RB);
+    }
+
+    public static function computeResponderConfirmation(
+        string $xV,
+        string $yV,
+        string $ida,
+        string $idb,
+        string $RA,
+        string $RB
+    ): string {
+        return self::computeConfirmation(0x03, $xV, $yV, $ida, $idb, $RA, $RB);
+    }
+
+    private static function computeConfirmation(
+        int $prefix,
+        string $xV,
+        string $yV,
+        string $ida,
+        string $idb,
+        string $RA,
+        string $RB
+    ): string {
+        $prefixByte = chr($prefix);
+        $entla = self::encodeEntl($ida);
+        $entlb = self::encodeEntl($idb);
+        $xRA = substr($RA, 0, 64);
+        $yRA = substr($RA, 64);
+        $xRB = substr($RB, 0, 64);
+        $yRB = substr($RB, 64);
+
+        $innerInput = $prefixByte . Hex::fromHex($yV) . Hex::fromHex($xV)
+            . Hex::fromHex($entla) . $ida . Hex::fromHex($entlb) . $idb
+            . Hex::fromHex($xRA) . Hex::fromHex($yRA) . Hex::fromHex($xRB) . Hex::fromHex($yRB);
+        $innerHash = Sm3::sm3($innerInput);
+
+        $outerInput = $prefixByte . Hex::fromHex($yV) . Hex::fromHex($innerHash);
+        return Sm3::sm3($outerInput);
     }
 
     /**
@@ -108,6 +192,7 @@ class KeyExchange
      * @param string $ida         Initiator's ID
      * @param string $idb         Responder's ID
      * @param bool   $isInitiator Whether computing on initiator side
+     * @return array{key: string, xV: string, yV: string}
      */
     private static function computeKey(
         string $d,
@@ -118,7 +203,7 @@ class KeyExchange
         string $ida,
         string $idb,
         bool $isInitiator
-    ): string {
+    ): array {
         // Validate keys
         Sm2::validatePrivateKey($d);
         Sm2::validatePrivateKey($r);
@@ -128,6 +213,10 @@ class KeyExchange
         }
         if (!Sm2::isOnCurve($R_other)) {
             throw new InvalidKeyException('Invalid other party ephemeral public key');
+        }
+
+        if ($klen <= 0) {
+            throw new InvalidKeyException('Key length (klen) must be greater than 0');
         }
 
         // Compute own ephemeral public key
@@ -200,7 +289,9 @@ class KeyExchange
         $kdfInput = $xV . $yV . $entla . bin2hex($ida) . $entlb . bin2hex($idb)
             . $xRA . $yRA . $xRB . $yRB;
 
-        return self::kdfKeyExchange($kdfInput, $klen);
+        $key = self::kdfKeyExchange($kdfInput, $klen);
+
+        return ['key' => $key, 'xV' => $xV, 'yV' => $yV];
     }
 
     /**
