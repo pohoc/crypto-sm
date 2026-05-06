@@ -14,6 +14,7 @@ use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
 use CryptoSm\SmCrypto;
 use CryptoSm\Utils\Hex;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 class CoverageCompleteTest extends TestCase
@@ -298,7 +299,7 @@ class CoverageCompleteTest extends TestCase
         return [[4], [8], [12], [13], [14], [15], [16]];
     }
 
-    /** @dataProvider provideGcmTagLengths */
+    #[DataProvider('provideGcmTagLengths')]
     public function testSm4GcmWithTagLength(int $tagLength): void
     {
         $key = str_repeat('e', 32);
