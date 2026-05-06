@@ -281,16 +281,14 @@ class SecurityFixTest extends TestCase
 
     public function testDecodeDerSignatureWithExtraData(): void
     {
-        // DER 签名后追加额外数据 — 应仍能解码（只解析 SEQUENCE 内的内容）
+        // DER 签名后追加额外数据 — 应拒绝尾部垃圾字节
         $rHex = str_pad('1', 64, '0', STR_PAD_LEFT);
         $sHex = str_pad('2', 64, '0', STR_PAD_LEFT);
         $der = Asn1::encodeDerSignature($rHex, $sHex);
-        // 追加额外数据
         $derWithExtra = $der . 'deadbeef';
-        // 应该仍能解码（decodeDerSignature 只读取 SEQUENCE 范围内）
-        [$r, $s] = Asn1::decodeDerSignature($derWithExtra);
-        $this->assertEquals($rHex, $r);
-        $this->assertEquals($sHex, $s);
+        $this->expectException(CryptoException::class);
+        $this->expectExceptionMessage('Invalid DER signature structure');
+        Asn1::decodeDerSignature($derWithExtra);
     }
 
     public function testDecodeDerSignatureTruncatedData(): void

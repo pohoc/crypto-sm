@@ -39,6 +39,7 @@ const KEY_EXCHANGE_ITERATIONS = 20; // 密钥交换迭代次数
 const GCM_ITERATIONS = 200;        // GCM 迭代次数
 
 const DATA_SIZES = [16, 64, 256, 1024, 4096]; // 测试数据大小（字节）
+const BASELINE_FILE = __DIR__ . '/benchmark-baseline.json';
 
 // ============================================================================
 // 辅助函数
@@ -140,6 +141,72 @@ function printSection(string $title): void
     echo str_repeat('=', 80) . "\n";
 }
 
+/**
+ * @return array<string, array{max_avg_seconds: float, note: string}>
+ */
+function loadBaseline(): array
+{
+    if (!is_file(BASELINE_FILE)) {
+        return [];
+    }
+
+    $json = file_get_contents(BASELINE_FILE);
+    if ($json === false) {
+        return [];
+    }
+
+    $data = json_decode($json, true);
+    if (!is_array($data) || !isset($data['metrics']) || !is_array($data['metrics'])) {
+        return [];
+    }
+
+    $baseline = [];
+    foreach ($data['metrics'] as $metric) {
+        if (!is_array($metric) || !isset($metric['label'], $metric['max_avg_seconds'])) {
+            continue;
+        }
+        $label = (string) $metric['label'];
+        $baseline[$label] = [
+            'max_avg_seconds' => (float) $metric['max_avg_seconds'],
+            'note' => isset($metric['note']) ? (string) $metric['note'] : '',
+        ];
+    }
+
+    return $baseline;
+}
+
+function printBaselineCheck(array $measured, array $baseline): void
+{
+    if ($baseline === []) {
+        return;
+    }
+
+    printSection('性能基线检查');
+    echo "\n";
+    printf("  %-28s  %-12s  %-12s  %-8s\n", '指标', '实测', '阈值', '结果');
+    echo str_repeat('-', 72) . "\n";
+
+    foreach ($baseline as $label => $config) {
+        if (!isset($measured[$label])) {
+            printf("  %-28s  %-12s  %-12s  %-8s\n", $label, '-', formatTime($config['max_avg_seconds']), 'MISS');
+            continue;
+        }
+
+        $avg = $measured[$label];
+        $status = $avg <= $config['max_avg_seconds'] ? 'PASS' : 'WARN';
+        printf(
+            "  %-28s  %-12s  %-12s  %-8s\n",
+            $label,
+            formatTime($avg),
+            formatTime($config['max_avg_seconds']),
+            $status
+        );
+        if ($config['note'] !== '') {
+            printf("    note: %s\n", $config['note']);
+        }
+    }
+}
+
 function printSystemInfo(): void
 {
     echo "系统信息\n";
@@ -175,6 +242,8 @@ echo "║          国密算法性能测试 (SM2 / SM3 / SM4)                   
 echo "╚══════════════════════════════════════════════════════════════════╝\n";
 
 printSystemInfo();
+$baseline = loadBaseline();
+$baselineMeasurements = [];
 
 // --- SM3 测试 ---
 printSection('SM3 哈希性能');
@@ -192,6 +261,7 @@ foreach (DATA_SIZES as $size) {
 foreach ($sm3Results as $r) {
     printResult($r);
 }
+$baselineMeasurements['SM3 哈希 (4096B)'] = $sm3Results[4]['avg'];
 
 // SM3 吞吐量
 echo "\n  SM3 吞吐量:\n";
@@ -257,6 +327,7 @@ foreach (DATA_SIZES as $size) {
 foreach ($hmacResults as $r) {
     printResult($r);
 }
+$baselineMeasurements['HMAC-SM3 (4096B)'] = $hmacResults[4]['avg'];
 
 // HMAC-SM3 流式
 echo "\n  HMAC-SM3 流式:\n";
@@ -317,6 +388,7 @@ foreach (DATA_SIZES as $size) {
 foreach ($sm4CbcResults as $r) {
     printResult($r);
 }
+$baselineMeasurements['SM4-CBC 加密 (1024B)'] = $sm4CbcResults[3]['avg'];
 
 // CFB 模式
 echo "\n  CFB 模式:\n";
@@ -375,7 +447,7 @@ $gcmIv = hex2bin($sm4GcmIv);
 $gcmTag = '';
 $gcmProbeResult = @openssl_encrypt('probe', 'SM4-GCM', $gcmKey, OPENSSL_RAW_DATA, $gcmIv, $gcmTag, '', 16);
 $gcmAvailable = ($gcmProbeResult !== false);
-echo '  SM4-GCM 后端: ' . ($gcmAvailable ? 'OpenSSL (硬件加速)' : '纯PHP (GcmPure)') . "\n\n";
+echo '  SM4-GCM 后端: ' . ($gcmAvailable ? 'OpenSSL (硬件加速)' : '纯PHP (Gcm)') . "\n\n";
 
 $sm4GcmEncResults = [];
 $sm4GcmDecResults = [];
@@ -398,6 +470,7 @@ echo "  加密:\n";
 foreach ($sm4GcmEncResults as $r) {
     printResult($r);
 }
+$baselineMeasurements['SM4-GCM 加密 (1024B)'] = $sm4GcmEncResults[2]['avg'];
 echo "\n  解密:\n";
 foreach ($sm4GcmDecResults as $r) {
     printResult($r);
@@ -505,6 +578,7 @@ foreach ([16, 256, 1024] as $size) {
 foreach ($sm2SignResults as $r) {
     printResult($r);
 }
+$baselineMeasurements['SM2 签名 (16B)'] = $sm2SignResults[0]['avg'];
 
 // 带 hash 的签名
 $hashOpts = (new SignatureOptions())->setHash(true)->setPublicKey($publicKey);
@@ -771,3 +845,4 @@ foreach ([16, 64, 256] as $i => $size) {
 }
 
 echo "\n测试完成。\n";
+printBaselineCheck($baselineMeasurements, $baseline);

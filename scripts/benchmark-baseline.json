@@ -1,0 +1,30 @@
+{
+  "description": "Core benchmark thresholds. avg_seconds must stay below max_avg_seconds on comparable hardware and backend conditions.",
+  "metrics": [
+    {
+      "label": "SM3 哈希 (4096B)",
+      "max_avg_seconds": 0.00003,
+      "note": "OpenSSL SM3 expected."
+    },
+    {
+      "label": "HMAC-SM3 (4096B)",
+      "max_avg_seconds": 0.00003,
+      "note": "OpenSSL SM3 expected."
+    },
+    {
+      "label": "SM4-CBC 加密 (1024B)",
+      "max_avg_seconds": 0.00002,
+      "note": "OpenSSL backend expected."
+    },
+    {
+      "label": "SM4-GCM 加密 (1024B)",
+      "max_avg_seconds": 0.0006,
+      "note": "Allows pure-PHP fallback path."
+    },
+    {
+      "label": "SM2 签名 (16B)",
+      "max_avg_seconds": 0.003,
+      "note": "GMP extension required."
+    }
+  ]
+}

@@ -60,6 +60,28 @@ jobs:
       - name: PHP-CS-Fixer (PSR-12)
         run: php-cs-fixer fix --dry-run --diff
 
+  compat-lowest:
+    name: Compat Lowest (PHP 8.0 / lowest deps)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.0'
+          extensions: gmp, openssl
+
+      - name: Validate composer.json
+        run: composer validate --strict
+
+      - name: Install lowest dependencies
+        run: composer update --no-interaction --prefer-lowest --prefer-stable
+
+      - name: Execute lowest-version tests
+        run: vendor/bin/phpunit --stop-on-error
+
   security:
     name: Security Check
     runs-on: ubuntu-latest

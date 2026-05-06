@@ -11,6 +11,7 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # 发布流程只生成 release draft，不回写 main，也不在 tag 事件里制造额外仓库状态变更。
 
     steps:
       - uses: actions/checkout@v4

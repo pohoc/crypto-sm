@@ -247,6 +247,30 @@ class Asn1Test extends TestCase
         Asn1::decodeDerSignature('0101020101');
     }
 
+    public function testDecodeDerSignatureRejectsTrailingBytes(): void
+    {
+        $der = '3006020101020101ff';
+        $this->expectException(CryptoException::class);
+        $this->expectExceptionMessage('Invalid DER signature structure');
+        Asn1::decodeDerSignature($der);
+    }
+
+    public function testDecodeIntegerUnexpectedEndOfData(): void
+    {
+        $offset = 0;
+        $this->expectException(CryptoException::class);
+        $this->expectExceptionMessage('Unexpected end of ASN.1 data');
+        Asn1::decodeInteger('', $offset);
+    }
+
+    public function testDecodeSequenceUnexpectedEndOfData(): void
+    {
+        $offset = 0;
+        $this->expectException(CryptoException::class);
+        $this->expectExceptionMessage('Unexpected end of ASN.1 data');
+        Asn1::decodeSequence('', $offset);
+    }
+
     // ========================================================================
     // 常量验证
     // ========================================================================

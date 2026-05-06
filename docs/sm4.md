@@ -11,6 +11,13 @@ SM4 是中国分组密码算法标准 (GM/T 0002-2012)，是一种 128 位分组
 - **GCM 纯 PHP 回退**：当 OpenSSL 不支持 SM4-GCM 时自动使用 `Gcm`（`GcmPure` 已废弃别名）
 - **GCM 预热**：`Sm4::warmupGcm($key)` 可消除首次调用建表延迟
 
+## 实现与性能预期
+
+- `SM4-GCM` 优先使用 OpenSSL 后端
+- 如果运行环境不支持 `SM4-GCM`，库会回退到本库的 GHASH 实现
+- 回退路径的性能会显著低于 `CBC/CFB/OFB/CTR`
+- 如果业务依赖高吞吐 AEAD，应优先使用支持 `SM4-GCM` 的 OpenSSL 环境
+
 ## 基本用法
 
 ### CBC 模式（默认，推荐）
@@ -185,6 +192,13 @@ Sm4::warmupGcm($key);
 // 后续 GCM 操作无建表延迟
 $ciphertext = Sm4::encrypt($data, $key, $options);
 ```
+
+#### GCM 使用约束
+
+- 同一把密钥下，IV 不能重复使用
+- 推荐使用 12 字节 IV
+- 纯 PHP 回退路径的正确性与 OpenSSL 一致，但吞吐量会低很多
+- 如果你看到 GCM 明显慢于 CBC/CTR，先确认当前环境是否支持 `SM4-GCM`
 
 ## 填充模式
 

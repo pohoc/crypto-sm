@@ -25,11 +25,17 @@ class Asn1
      */
     public static function decodeInteger(string $data, int &$offset): string
     {
+        if (!isset($data[$offset])) {
+            throw new CryptoException('Unexpected end of ASN.1 data');
+        }
         if (ord($data[$offset]) !== self::TAG_INTEGER) {
             throw new CryptoException('Invalid INTEGER tag');
         }
         $offset++;
 
+        if (!isset($data[$offset])) {
+            throw new CryptoException('Unexpected end of ASN.1 data');
+        }
         $len = ord($data[$offset++]);
         if ($len > 128) {
             $lenBytes = $len & 0x7F;
@@ -69,11 +75,17 @@ class Asn1
      */
     public static function decodeSequence(string $data, int &$offset): int
     {
+        if (!isset($data[$offset])) {
+            throw new CryptoException('Unexpected end of ASN.1 data');
+        }
         if (ord($data[$offset]) !== self::TAG_SEQUENCE) {
             throw new CryptoException('Invalid SEQUENCE tag');
         }
         $offset++;
 
+        if (!isset($data[$offset])) {
+            throw new CryptoException('Unexpected end of ASN.1 data');
+        }
         $seqLen = ord($data[$offset++]);
         if ($seqLen > 128) {
             $lenBytes = $seqLen & 0x7F;
@@ -219,10 +231,14 @@ class Asn1
     public static function decodeDerSignatureBinary(string $data): array
     {
         $offset = 0;
-        self::decodeSequence($data, $offset);
+        $seqLen = self::decodeSequence($data, $offset);
+        $seqEnd = $offset + $seqLen;
 
         $r = self::decodeInteger($data, $offset);
         $s = self::decodeInteger($data, $offset);
+        if ($offset !== $seqEnd || $offset !== strlen($data)) {
+            throw new CryptoException('Invalid DER signature structure');
+        }
 
         $rHex = gmp_strval(gmp_init($r), 16);
         $sHex = gmp_strval(gmp_init($s), 16);

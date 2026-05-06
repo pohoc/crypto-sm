@@ -49,6 +49,13 @@ extension=php_gmp.dll
 var_dump(extension_loaded('gmp'));
 ```
 
+## 兼容性策略
+
+- CI 覆盖 PHP `8.0` 到 `8.5`
+- 常规矩阵使用 `composer install` 验证锁定依赖
+- 最低版本兼容 job 使用 `composer update --prefer-lowest --prefer-stable` 验证最低依赖组合
+- 测试用例需要兼容 `PHPUnit 9/10/11`
+
 ## 支持的算法
 
 ### SM2
@@ -71,6 +78,13 @@ var_dump(extension_loaded('gmp'));
 - ECB / CBC / CFB / OFB / CTR / GCM 模式
 - PKCS5/PKCS7 / Zero / ISO 10126 / ANSI X9.23 / None 填充
 - GCM 认证加密（OpenSSL 优先 + 纯 PHP 回退）
+
+#### SM4-GCM 性能预期
+
+- 优先使用 OpenSSL 的 `SM4-GCM`
+- 环境不支持 `SM4-GCM` 时自动回退到本库 GHASH 实现
+- 回退路径会显著慢于 `CBC/CFB/OFB/CTR`，属于预期行为
+- 高吞吐场景应优先部署在支持 `SM4-GCM` 的 OpenSSL 环境
 
 ## 快速开始
 
@@ -328,6 +342,7 @@ $plaintext = SmCrypto::sm4Decrypt($ciphertext, $key, $options);
 
 > 测试环境：PHP 8.4.4 / macOS / OpenSSL 3.4.1 / Apple M 系列  
 > 运行方式：`php scripts/benchmark.php`
+> 基线阈值：`scripts/benchmark-baseline.json`
 
 ### SM3 哈希
 
@@ -362,6 +377,18 @@ $plaintext = SmCrypto::sm4Decrypt($ciphertext, $key, $options);
 | GCM 解密 | 1 KB | ~250 μs | ~4 MB/s |
 
 > \* GCM 纯 PHP 回退路径（本测试环境 OpenSSL 不支持 SM4-GCM），使用 8-bit 查表 + 16 层移位表优化。首次调用含建表开销（~1.7ms），可通过 `Sm4::warmupGcm($key)` 预热消除。若 OpenSSL 支持 SM4-GCM，性能将与其他模式相当。
+
+### 性能基线
+
+脚本内置一组核心指标阈值，用于识别明显性能退化：
+
+- `SM3 哈希 (4096B)`
+- `HMAC-SM3 (4096B)`
+- `SM4-CBC 加密 (1024B)`
+- `SM4-GCM 加密 (1024B)`
+- `SM2 签名 (16B)`
+
+基线文件位于 [scripts/benchmark-baseline.json](/Users/pohoc/code/next/crypto-sm/scripts/benchmark-baseline.json)。当平均耗时超过阈值时，脚本会输出 `WARN`。
 
 ### SM4 模式吞吐量对比（1 KB 数据）
 
