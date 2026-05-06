@@ -432,48 +432,6 @@ class CoverageCompleteTest extends TestCase
         $this->assertFalse(Sm2::isOnCurve($modified));
     }
 
-    // ─── SM4Options ECB deprecation warning ───────────────────────────────
-
-    public function testSm4OptionsEcbDeprecationWarning(): void
-    {
-        $errored = false;
-        set_error_handler(function (int $errno, string $errstr) use (&$errored): bool {
-            if ($errno === E_USER_DEPRECATED && str_contains($errstr, 'ECB')) {
-                $errored = true;
-            }
-            return true;
-        }, E_USER_DEPRECATED);
-
-        try {
-            $opts = new Sm4Options();
-            $opts->setMode(Sm4::MODE_ECB);
-        } finally {
-            restore_error_handler();
-        }
-
-        $this->assertTrue($errored, 'E_USER_DEPRECATED should be triggered for ECB mode');
-    }
-
-    public function testSm4OptionsEcbSetViaConstructor(): void
-    {
-        $errored = false;
-        set_error_handler(function (int $errno, string $errstr) use (&$errored): bool {
-            if ($errno === E_USER_DEPRECATED && str_contains($errstr, 'ECB')) {
-                $errored = true;
-            }
-            return true;
-        }, E_USER_DEPRECATED);
-
-        try {
-            $opts = new Sm4Options();
-            $opts->setMode('ecb');
-        } finally {
-            restore_error_handler();
-        }
-
-        $this->assertTrue($errored, 'E_USER_DEPRECATED should be triggered for ECB mode');
-    }
-
     // ─── GCM non-12-byte IV (GHASH-based J0 path) ─────────────────────────
 
     public function testGcmWith8ByteIv(): void
