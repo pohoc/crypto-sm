@@ -4,21 +4,24 @@ declare(strict_types=1);
 
 namespace CryptoSm\SM4;
 
-use CryptoSm\Crypto\GcmPure;
+use CryptoSm\Crypto\Gcm;
 use CryptoSm\Exception\CryptoException;
 use CryptoSm\Exception\InvalidKeyException;
 use CryptoSm\Interfaces\CipherInterface;
-use CryptoSm\Utils\Hex;
 
 /**
  * SM4 block cipher implementation (GM/T 0002-2012).
  *
- * Supports ECB and CBC modes with PKCS5 padding.
+ * Supports ECB, CBC, CFB, OFB, CTR, and GCM modes with configurable padding.
  * CBC mode is the default; ECB is not recommended for new applications.
+ * GCM mode provides authenticated encryption with associated data (AEAD).
  */
 class Sm4 implements CipherInterface
 {
-    /** @var string Electronic Codebook mode (not recommended) */
+    /**
+     * @var string Electronic Codebook mode
+     * @deprecated ECB mode does not provide data confidentiality for repeated patterns. Use CBC or GCM instead.
+     */
     public const MODE_ECB = 'ecb';
 
     /** @var string Cipher Block Chaining mode (default, recommended) */
@@ -67,17 +70,6 @@ class Sm4 implements CipherInterface
     public static function decrypt(string $data, string $key, mixed $options = null): string
     {
         return self::crypt($data, $key, false, $options instanceof Sm4Options ? $options : null);
-    }
-
-    /**
-     * Convert a hex string to a byte array.
-     *
-     * @param  string         $hex Hex string to convert
-     * @return array<int,int> Array of byte values
-     */
-    public static function hexToBytesStatic(string $hex): array
-    {
-        return Hex::toBytes($hex);
     }
 
     private static function crypt(string $data, string $key, bool $encrypt, ?Sm4Options $options = null): string
@@ -162,10 +154,25 @@ class Sm4 implements CipherInterface
         return $isStreamMode ? $plain : self::maybeUnpad($plain, $padding);
     }
 
-    /**
-     * Handle SM4-GCM encryption/decryption.
-     * Falls back to pure PHP implementation when OpenSSL SM4-GCM is unavailable.
-     */
+    /** @var array<string, Gcm> Cached GCM instances keyed by hex key */
+    private static array $gcmCache = [];
+
+    public static function warmupGcm(string $key): void
+    {
+        self::validateHexKey($key);
+        $keyBin = hex2bin($key);
+        if ($keyBin === false) {
+            throw new InvalidKeyException('Invalid key hex');
+        }
+        if (!isset(self::$gcmCache[$key])) {
+            if (count(self::$gcmCache) > 8) {
+                array_shift(self::$gcmCache);
+            }
+            self::$gcmCache[$key] = Gcm::fromKey($keyBin);
+        }
+        self::$gcmCache[$key]->warmup();
+    }
+
     private static function cryptGcm(string $data, string $key, bool $encrypt, Sm4Options $options): string
     {
         $iv = $options->getIv();
@@ -183,109 +190,22 @@ class Sm4 implements CipherInterface
             throw new InvalidKeyException('Invalid key hex');
         }
 
+        if (!isset(self::$gcmCache[$key])) {
+            if (count(self::$gcmCache) > 8) {
+                array_shift(self::$gcmCache);
+            }
+            self::$gcmCache[$key] = Gcm::fromKey($keyBin);
+        }
+        $gcm = self::$gcmCache[$key];
+
         $aad = $options->getAad();
         $tagLength = $options->getTagLength();
-
-        // Try OpenSSL first, fall back to pure PHP
-        if (self::isOpenSSLGcmAvailable()) {
-            return self::cryptGcmOpenSSL($data, $keyBin, $ivBin, $aad, $tagLength, $encrypt);
-        }
-
-        return self::cryptGcmPure($data, $keyBin, $ivBin, $aad, $tagLength, $encrypt);
-    }
-
-    /**
-     * Check if OpenSSL supports SM4-GCM (cached result).
-     */
-    private static ?bool $gcmAvailable = null;
-
-    private static function isOpenSSLGcmAvailable(): bool
-    {
-        if (self::$gcmAvailable !== null) {
-            return self::$gcmAvailable;
-        }
-        // Probe: actually try to encrypt to verify support
-        $key = hex2bin('0123456789abcdeffedcba9876543210');
-        if ($key === false) {
-            self::$gcmAvailable = false;
-            return false;
-        }
-        $iv = random_bytes(12);
-        $tag = '';
-        $result = @openssl_encrypt('probe', 'SM4-GCM', $key, OPENSSL_RAW_DATA, $iv, $tag, '', 16);
-        self::$gcmAvailable = ($result !== false);
-        return self::$gcmAvailable;
-    }
-
-    /**
-     * SM4-GCM via OpenSSL.
-     */
-    private static function cryptGcmOpenSSL(string $data, string $keyBin, string $ivBin, string $aad, int $tagLength, bool $encrypt): string
-    {
-        if ($encrypt) {
-            $tag = '';
-            $cipher = @openssl_encrypt(
-                $data,
-                'SM4-GCM',
-                $keyBin,
-                OPENSSL_RAW_DATA,
-                $ivBin,
-                $tag,
-                $aad,
-                $tagLength
-            );
-            if ($cipher === false) {
-                throw new CryptoException('SM4-GCM encryption failed: ' . openssl_error_string());
-            }
-            return bin2hex($cipher) . bin2hex((string) $tag);
-        }
-
-        // Decrypt: data = ciphertext_hex + tag_hex
-        $tagHex = substr($data, -$tagLength * 2);
-        $cipherHex = substr($data, 0, -$tagLength * 2);
-
-        if (!preg_match('/^[0-9a-fA-F]+$/', $cipherHex) || strlen($cipherHex) % 2 !== 0) {
-            throw new CryptoException('Invalid GCM ciphertext hex');
-        }
-        if (!preg_match('/^[0-9a-fA-F]+$/', $tagHex) || strlen($tagHex) % 2 !== 0) {
-            throw new CryptoException('Invalid GCM tag hex');
-        }
-
-        $cipherBin = hex2bin($cipherHex);
-        $tagBin = hex2bin($tagHex);
-        if ($cipherBin === false || $tagBin === false) {
-            throw new CryptoException('Invalid GCM ciphertext or tag');
-        }
-
-        $plain = @openssl_decrypt(
-            $cipherBin,
-            'SM4-GCM',
-            $keyBin,
-            OPENSSL_RAW_DATA,
-            $ivBin,
-            $tagBin,
-            $aad
-        );
-        if ($plain === false) {
-            throw new CryptoException('SM4-GCM decryption failed: authentication tag mismatch');
-        }
-
-        return $plain;
-    }
-
-    /**
-     * SM4-GCM via pure PHP implementation.
-     */
-    private static function cryptGcmPure(string $data, string $keyBin, string $ivBin, string $aad, int $tagLength, bool $encrypt): string
-    {
-        $gcm = GcmPure::fromKey($keyBin);
 
         if ($encrypt) {
             $result = $gcm->encrypt($data, $ivBin, $aad, $tagLength);
             return bin2hex($result['ciphertext']) . bin2hex($result['tag']);
         }
 
-        // Decrypt: data = ciphertext_hex + tag_hex
         $tagHex = substr($data, -$tagLength * 2);
         $cipherHex = substr($data, 0, -$tagLength * 2);
 
@@ -361,7 +281,9 @@ class Sm4 implements CipherInterface
         }
 
         if ($padding === 'zero') {
-            // Zero padding: trim trailing zero bytes (note: cannot distinguish from data that ends with \0)
+            // WARNING: Zero padding cannot distinguish padding zeros from data that ends with \0.
+            // Data with trailing null bytes will be silently truncated. Use PKCS5/PKCS7 instead
+            // if your data may contain trailing null bytes.
             return rtrim($data, "\0");
         }
 

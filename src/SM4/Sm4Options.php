@@ -39,6 +39,9 @@ class Sm4Options
     /**
      * Set the padding mode.
      *
+     * WARNING: "zero" padding cannot preserve trailing null bytes in data.
+     * If your data may end with \0 bytes, use "pkcs5" or "pkcs7" instead.
+     *
      * @param  string              $padding Padding mode: "pkcs5" (default), "pkcs7", "zero", "iso10126", "ansix923", or "none"
      * @return self
      * @throws InvalidKeyException If padding value is invalid
@@ -77,13 +80,22 @@ class Sm4Options
         if (!in_array($mode, $valid, true)) {
             throw new InvalidKeyException('Mode must be one of: ' . implode(', ', $valid));
         }
+        if ($mode === Sm4::MODE_ECB) {
+            @trigger_error('SM4 ECB mode is not recommended — it does not provide data confidentiality for repeated patterns. Use CBC or GCM instead.', E_USER_DEPRECATED);
+        }
         $this->mode = $mode;
+        $this->iv = null;
         return $this;
     }
 
     /**
      * Get the initialization vector (IV) as hex string.
      * Lazily generates a random IV for modes that require it if not explicitly set.
+     *
+     * IMPORTANT: The auto-generated IV is cached within this instance only.
+     * For decryption, you MUST explicitly set the same IV that was used during
+     * encryption by calling setIv(). Creating a new Sm4Options instance will
+     * generate a different random IV, causing decryption to fail.
      *
      * @return string 32-character hex string (128 bits) for ECB/CBC/CFB/OFB/CTR, or variable-length hex for GCM
      */
@@ -109,15 +121,20 @@ class Sm4Options
      */
     public function setIv(string $iv): self
     {
-        if ($this->mode === Sm4::MODE_GCM) {
-            // GCM allows variable IV length, minimum 1 byte
-            if (!preg_match('/^[0-9a-fA-F]+$/', $iv) || strlen($iv) < 2 || strlen($iv) % 2 !== 0) {
-                throw new InvalidKeyException('GCM IV must be valid hex with at least 1 byte');
-            }
-        } else {
-            if (!preg_match('/^[0-9a-fA-F]{32}$/', $iv)) {
-                throw new InvalidKeyException('IV must be 128 bits (32 hex chars)');
-            }
+        if ($iv !== '' && !preg_match('/^[0-9a-fA-F]+$/', $iv)) {
+            throw new InvalidKeyException('IV must be a valid hex string');
+        }
+        if ($iv !== '' && strlen($iv) % 2 !== 0) {
+            throw new InvalidKeyException('IV must have even length (complete bytes)');
+        }
+        if ($iv !== '' && $this->mode !== Sm4::MODE_GCM && strlen($iv) !== 32) {
+            throw new InvalidKeyException('IV must be 32 hex chars (16 bytes) for ' . strtoupper($this->mode) . ' mode');
+        }
+        if ($iv !== '' && $this->mode === Sm4::MODE_GCM && strlen($iv) < 24) {
+            throw new InvalidKeyException('IV must be at least 24 hex chars (12 bytes) for GCM mode');
+        }
+        if ($iv === '' && $this->mode === Sm4::MODE_GCM) {
+            throw new InvalidKeyException('IV is required for GCM mode');
         }
         $this->iv = $iv;
         return $this;
