@@ -8,7 +8,8 @@ SM4 是中国分组密码算法标准 (GM/T 0002-2012)，是一种 128 位分组
 - **6 种加密模式**：ECB、CBC、CFB、OFB、CTR、GCM
 - **5 种填充模式**：PKCS5/PKCS7、Zero、ISO 10126、ANSI X9.23、None
 - **OpenSSL 加速**：ECB/CBC/CFB/OFB/CTR 使用 OpenSSL C 原生实现
-- **GCM 纯 PHP 回退**：当 OpenSSL 不支持 SM4-GCM 时自动使用 `GcmPure`
+- **GCM 纯 PHP 回退**：当 OpenSSL 不支持 SM4-GCM 时自动使用 `Gcm`（`GcmPure` 已废弃别名）
+- **GCM 预热**：`Sm4::warmupGcm($key)` 可消除首次调用建表延迟
 
 ## 基本用法
 
@@ -171,6 +172,20 @@ $options = (new Sm4Options())
 
 > **注意**：GCM 密文格式为 `ciphertext_hex + tag_hex`。认证标签验证失败会抛出 `CryptoException`。
 
+#### GCM 预热
+
+GCM 首次调用时需要构建查表（约 1.7ms），可通过预热消除此延迟：
+
+```php
+use CryptoSm\SM4\Sm4;
+
+// 在应用启动时预热（可选）
+Sm4::warmupGcm($key);
+
+// 后续 GCM 操作无建表延迟
+$ciphertext = Sm4::encrypt($data, $key, $options);
+```
+
 ## 填充模式
 
 ### PKCS5/PKCS7 填充（默认）
@@ -326,8 +341,9 @@ try {
 - **密钥长度**: 128 位（16 字节）
 - **轮数**: 32 轮
 - **标准**: GM/T 0002-2012
-- **GCM 实现**: OpenSSL SM4-GCM 可用时自动使用，否则回退到纯 PHP（GcmPure）
-- **GCM 纯 PHP**: 使用 OpenSSL SM4-ECB 做块加密 + 8-bit 查表法 GHASH
+- **GCM 实现**: OpenSSL SM4-GCM 可用时自动使用，否则回退到纯 PHP（`Gcm` 类）
+- **GCM 纯 PHP**: 使用 OpenSSL SM4-ECB 做块加密 + 8-bit 查表法 GHASH + 16 层移位表 + reduction table 优化
+- **GcmPure**: 已废弃别名，继承自 `Gcm`，将在未来版本移除
 
 ## 安全注意事项
 

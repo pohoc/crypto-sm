@@ -240,6 +240,9 @@ $options = (new Sm4Options())
 $ciphertext = Sm4::encrypt($data, $key, $options);
 // 密文格式：ciphertext_hex + tag_hex
 $plaintext = Sm4::decrypt($ciphertext, $key, $options);
+
+// GCM 预热（消除首次调用建表延迟，可选）
+Sm4::warmupGcm($key);
 ```
 
 #### SM4 填充模式
@@ -318,8 +321,8 @@ $plaintext = SmCrypto::sm4Decrypt($ciphertext, $key, $options);
 - **零运行时依赖** — 仅需 `ext-gmp` 和 `ext-openssl`
 - **OpenSSL 加速** — SM3 和 SM4（CBC/ECB/CFB/OFB/CTR）使用 OpenSSL 原生实现，不可用时自动回退到纯 PHP；SM4-GCM 优先使用 OpenSSL，回退到纯 PHP GHASH 实现
 - **标准合规** — 全部通过 GM/T 0002/0003/0004 标准测试向量验证（529 测试，1,000,000+ 断言）
-- **安全** — GCM 认证标签时序安全比较、DER 签名自动检测、安全随机数生成
-- **优雅 API** — 门面 + 子系统双层 API，选项对象链式调用
+- **安全** — GCM 认证标签时序安全比较、DER 签名自动检测、安全随机数生成、SM2 签名 60000+ 次零失败验证
+- **优雅 API** — 门面 + 子系统双层 API，选项对象链式调用，GCM warmup 预热接口
 
 ## 性能基准
 
@@ -355,10 +358,10 @@ $plaintext = SmCrypto::sm4Decrypt($ciphertext, $key, $options);
 | CFB 加密 | 1 KB | ~8.5 μs | ~115 MB/s |
 | OFB 加密 | 1 KB | ~8.5 μs | ~115 MB/s |
 | CTR 加密 | 1 KB | ~8.5 μs | ~115 MB/s |
-| GCM 加密 | 1 KB | ~15 ms* | ~60 KB/s* |
-| GCM 解密 | 1 KB | ~16 ms* | ~60 KB/s* |
+| GCM 加密 | 1 KB | ~240 μs | ~4 MB/s |
+| GCM 解密 | 1 KB | ~250 μs | ~4 MB/s |
 
-> \* GCM 纯 PHP 回退路径（本测试环境 OpenSSL 不支持 SM4-GCM）。若 OpenSSL 支持 SM4-GCM，性能将与其他模式相当。
+> \* GCM 纯 PHP 回退路径（本测试环境 OpenSSL 不支持 SM4-GCM），使用 8-bit 查表 + 16 层移位表优化。首次调用含建表开销（~1.7ms），可通过 `Sm4::warmupGcm($key)` 预热消除。若 OpenSSL 支持 SM4-GCM，性能将与其他模式相当。
 
 ### SM4 模式吞吐量对比（1 KB 数据）
 
@@ -368,30 +371,30 @@ CBC  █████████████████████████
 CFB  █████████████████████████████████████     ~115 MB/s
 OFB  █████████████████████████████████████     ~115 MB/s
 CTR  █████████████████████████████████████     ~115 MB/s
-GCM  ▏                                         ~60 KB/s (纯PHP)
+GCM  █                                         ~4 MB/s (纯PHP, 8-bit查表)
 ```
 
 ### SM2 非对称操作
 
 | 操作 | 数据大小 | 平均耗时 |
 |------|----------|----------|
-| 密钥生成 | - | ~1.4 ms |
-| 签名 | 16 B | ~2.5 ms |
-| 签名 | 1 KB | ~2.6 ms |
-| 验签 | 16 B | ~2.5 ms |
-| 加密 | 64 B | ~2.5 ms |
-| 解密 | 64 B | ~1.3 ms |
-| 密钥交换（完整流程） | 32 B | ~9 ms |
+| 密钥生成 | - | ~1.2 ms |
+| 签名 | 16 B | ~1.1 ms |
+| 签名 | 1 KB | ~1.1 ms |
+| 验签 | 16 B | ~2.3 ms |
+| 加密 | 64 B | ~2.3 ms |
+| 解密 | 64 B | ~1.2 ms |
+| 密钥交换（完整流程） | 32 B | ~11.5 ms |
 
 ### SM2 PEM 导入/导出
 
 | 操作 | 平均耗时 |
 |------|----------|
-| SEC1 私钥导出 | ~2.7 μs |
-| PKCS#8 私钥导出 | ~3.1 μs |
-| 公钥导出 | ~3.8 μs |
-| 私钥导入 | ~1.2 ms |
-| 公钥导入 | ~1.1 μs |
+| SEC1 私钥导出 | ~2.5 μs |
+| PKCS#8 私钥导出 | ~3.5 μs |
+| 公钥导出 | ~3.5 μs |
+| 私钥导入 | ~1.1 ms |
+| 公钥导入 | ~2.7 μs |
 
 > 私钥导入耗时较高是因为需要验证密钥范围并推导公钥（椭圆曲线点乘运算）。
 

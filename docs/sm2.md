@@ -226,6 +226,34 @@ $sharedKeyB = KeyExchange::responderComputeKey(
 // $sharedKeyA === $sharedKeyB
 ```
 
+### 密钥确认
+
+GM/T 0003-2012 密钥交换协议包含密钥确认步骤，可验证双方计算结果一致：
+
+```php
+use CryptoSm\SM2\KeyExchange;
+
+// 完整密钥交换（含中间值，用于密钥确认）
+$resultA = KeyExchange::initiatorComputeKeyFull(
+    $keypairA->getPrivateKey(), $ephemeralA->getPrivateKey(),
+    $keypairB->getPublicKey(), $ephemeralB->getPublicKey(),
+    $klen
+);
+// $resultA = ['key' => '...', 'xV' => '...', 'yV' => '...']
+
+$resultB = KeyExchange::responderComputeKeyFull(
+    $keypairB->getPrivateKey(), $ephemeralB->getPrivateKey(),
+    $keypairA->getPublicKey(), $ephemeralA->getPublicKey(),
+    $klen
+);
+
+// 计算密钥确认哈希
+$s1 = KeyExchange::computeInitiatorConfirmation($resultA['xV'], $resultA['yV'], $resultA['key']);
+$s2 = KeyExchange::computeResponderConfirmation($resultA['xV'], $resultA['yV'], $resultA['key']);
+
+// 发起方验证 S2，响应方验证 S1
+```
+
 ### 自定义 ID
 
 ```php
@@ -351,7 +379,7 @@ try {
 
 - **曲线**: SM2 推荐曲线（256位素数域）
 - **OID**: 1.2.156.10197.1.301
-- **点乘优化**: 4-bit 窗口法 + 基点预计算缓存
+- **点乘优化**: 8-bit 窗口法 + 基点预计算缓存（255 条目）+ 变基点缓存（最多 16 条目）
 - **签名默认用户 ID**: `1234567812345678`（GM/T 0009-2012）
 - **DER 签名**: 验签时自动检测 RS 拼接 vs DER 格式
 - **标准**: GM/T 0003-2012
