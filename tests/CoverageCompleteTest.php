@@ -299,6 +299,9 @@ class CoverageCompleteTest extends TestCase
         return [[4], [8], [12], [13], [14], [15], [16]];
     }
 
+    /**
+     * @dataProvider provideGcmTagLengths
+     */
     #[DataProvider('provideGcmTagLengths')]
     public function testSm4GcmWithTagLength(int $tagLength): void
     {
