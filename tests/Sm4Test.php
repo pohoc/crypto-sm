@@ -7,6 +7,7 @@ namespace CryptoSm\Tests;
 use CryptoSm\Exception\InvalidKeyException;
 use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
+use CryptoSm\Utils\Hex;
 use PHPUnit\Framework\TestCase;
 
 class Sm4Test extends TestCase
@@ -291,10 +292,10 @@ class Sm4Test extends TestCase
     // 辅助方法
     // ========================================================================
 
-    public function testSm4HexToBytesStatic(): void
+    public function testSm4HexToBytes(): void
     {
         $hex = '0123456789abcdef';
-        $bytes = Sm4::hexToBytesStatic($hex);
+        $bytes = Hex::toBytes($hex);
         $this->assertCount(8, $bytes);
     }
 
