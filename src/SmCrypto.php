@@ -363,4 +363,5 @@ class SmCrypto
     {
         return Sm4::decrypt($data, $key, $options);
     }
+
 }

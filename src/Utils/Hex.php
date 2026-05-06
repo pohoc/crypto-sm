@@ -76,4 +76,9 @@ class Hex
         $result = hex2bin($hex);
         return $result === false ? '' : $result;
     }
+
+    public static function isValidHex(string $hex): bool
+    {
+        return $hex === '' || preg_match('/^[0-9a-fA-F]+$/', $hex) === 1;
+    }
 }
