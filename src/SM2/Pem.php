@@ -455,7 +455,7 @@ class Pem
             return [$byte, $offset + 1];
         }
         $numBytes = $byte & 0x7F;
-        if ($numBytes > 4) {
+        if ($numBytes > 4 || $offset + 1 + $numBytes > strlen($data)) {
             throw new InvalidKeyException('Invalid DER: length field too long');
         }
         $len = 0;
