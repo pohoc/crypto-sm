@@ -277,36 +277,30 @@ class Sm4 implements CipherInterface
         }
         $len = strlen($data);
         if ($len === 0 || $len % 16 !== 0) {
-            throw new InvalidKeyException('Invalid padded plaintext');
+            throw new CryptoException('Decryption failed');
         }
 
         if ($padding === 'zero') {
-            // WARNING: Zero padding cannot distinguish padding zeros from data that ends with \0.
-            // Data with trailing null bytes will be silently truncated. Use PKCS5/PKCS7 instead
-            // if your data may contain trailing null bytes.
             return rtrim($data, "\0");
         }
 
-        // PKCS5/PKCS7, ISO 10126, ANSI X9.23 — all use last byte as pad length
         $pad = ord($data[$len - 1]);
 
         if ($padding === 'pkcs5' || $padding === 'pkcs7') {
             if ($pad < 1 || $pad > 16 || substr($data, -$pad) !== str_repeat(chr($pad), $pad)) {
-                throw new InvalidKeyException('Invalid PKCS padding');
+                throw new CryptoException('Decryption failed');
             }
         } elseif ($padding === 'ansix923') {
             if ($pad < 1 || $pad > 16) {
-                throw new InvalidKeyException('Invalid ANSI X9.23 padding');
+                throw new CryptoException('Decryption failed');
             }
-            // All pad bytes except the last must be zero
             $padBytes = substr($data, -$pad, $pad - 1);
             if ($padBytes !== str_repeat("\0", $pad - 1)) {
-                throw new InvalidKeyException('Invalid ANSI X9.23 padding');
+                throw new CryptoException('Decryption failed');
             }
         } else {
-            // ISO 10126: random pad bytes, only verify the last byte
             if ($pad < 1 || $pad > 16) {
-                throw new InvalidKeyException('Invalid ISO 10126 padding');
+                throw new CryptoException('Decryption failed');
             }
         }
 

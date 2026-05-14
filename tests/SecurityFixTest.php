@@ -325,8 +325,8 @@ class SecurityFixTest extends TestCase
     {
         // pad=0 是无效的 PKCS7 填充
         // 构造一个末尾字节为 0x00 的"解密结果"来测试 maybeUnpad
-        $this->expectException(InvalidKeyException::class);
-        $this->expectExceptionMessage('Invalid PKCS padding');
+        $this->expectException(CryptoException::class);
+        $this->expectExceptionMessage('Decryption failed');
 
         $ref = new \ReflectionClass(Sm4::class);
         $method = $ref->getMethod('maybeUnpad');
@@ -340,8 +340,8 @@ class SecurityFixTest extends TestCase
     public function testSm4InvalidPkcs7Padding17(): void
     {
         // pad=17 超出块大小 (最大应为 16)
-        $this->expectException(InvalidKeyException::class);
-        $this->expectExceptionMessage('Invalid PKCS padding');
+        $this->expectException(CryptoException::class);
+        $this->expectExceptionMessage('Decryption failed');
 
         $ref = new \ReflectionClass(Sm4::class);
         $method = $ref->getMethod('maybeUnpad');
@@ -355,8 +355,8 @@ class SecurityFixTest extends TestCase
     public function testSm4InvalidPkcs7PartialCorrectPadding(): void
     {
         // 部分正确的填充：声称 pad=3 但只有最后 2 字节匹配
-        $this->expectException(InvalidKeyException::class);
-        $this->expectExceptionMessage('Invalid PKCS padding');
+        $this->expectException(CryptoException::class);
+        $this->expectExceptionMessage('Decryption failed');
 
         $ref = new \ReflectionClass(Sm4::class);
         $method = $ref->getMethod('maybeUnpad');
@@ -577,9 +577,9 @@ class SecurityFixTest extends TestCase
             $pt = Sm4::decrypt($ct, $key, $opts);
             // 如果没抛异常，解密结果应不匹配
             $this->assertNotEquals($msg, $pt);
-        } catch (InvalidKeyException $e) {
-            // PKCS 填充验证失败
-            $this->assertStringContainsString('PKCS', $e->getMessage());
+        } catch (CryptoException $e) {
+            // 填充验证失败（统一错误消息）
+            $this->assertStringContainsString('Decryption failed', $e->getMessage());
         }
     }
 

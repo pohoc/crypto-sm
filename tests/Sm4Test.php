@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CryptoSm\Tests;
 
+use CryptoSm\Exception\CryptoException;
 use CryptoSm\Exception\InvalidKeyException;
 use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
@@ -337,9 +338,9 @@ class Sm4Test extends TestCase
             $decrypted = Sm4::decrypt($encrypted, $wrongKey, $options);
             // 如果没有抛异常，内容应不匹配
             $this->assertNotEquals($msg, $decrypted);
-        } catch (InvalidKeyException $e) {
-            // PKCS 填充验证失败 → 符合预期
-            $this->assertStringContainsString('PKCS', $e->getMessage());
+        } catch (CryptoException $e) {
+            // 填充验证失败（统一错误消息）→ 符合预期
+            $this->assertStringContainsString('Decryption failed', $e->getMessage());
         }
     }
 
@@ -474,9 +475,9 @@ class Sm4Test extends TestCase
         try {
             $decrypted = Sm4::decrypt($ct, $this->key, $opts);
             $this->assertNotEquals($msg, $decrypted);
-        } catch (InvalidKeyException $e) {
-            // PKCS 填充验证失败 → 符合预期
-            $this->assertStringContainsString('PKCS', $e->getMessage());
+        } catch (CryptoException $e) {
+            // 填充验证失败（统一错误消息）→ 符合预期
+            $this->assertStringContainsString('Decryption failed', $e->getMessage());
         }
     }
 }

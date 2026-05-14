@@ -356,8 +356,8 @@ class NewFeatureTest extends TestCase
         // Create data with invalid ANSI X9.23: non-zero bytes in padding area
         // Last byte = 3 (pad length), but preceding 2 bytes not all zero
         $data = str_repeat('A', 13) . "\x01\x02\x03";
-        $this->expectException(InvalidKeyException::class);
-        $this->expectExceptionMessage('ANSI X9.23');
+        $this->expectException(CryptoException::class);
+        $this->expectExceptionMessage('Decryption failed');
         $method->invoke(null, $data, 'ansix923');
     }
 

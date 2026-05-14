@@ -92,24 +92,36 @@ class Sm4Options
      * Get the initialization vector (IV) as hex string.
      * Lazily generates a random IV for modes that require it if not explicitly set.
      *
-     * IMPORTANT: The auto-generated IV is cached within this instance only.
-     * For decryption, you MUST explicitly set the same IV that was used during
-     * encryption by calling setIv(). Creating a new Sm4Options instance will
-     * generate a different random IV, causing decryption to fail.
+     * IMPORTANT: For GCM mode, you MUST NOT reuse the same IV with the same key.
+     * Call resetIv() or create a new Sm4Options instance before each encryption
+     * to ensure a fresh IV. For decryption, you MUST explicitly set the same IV
+     * that was used during encryption by calling setIv().
      *
      * @return string 32-character hex string (128 bits) for ECB/CBC/CFB/OFB/CTR, or variable-length hex for GCM
      */
     public function getIv(): string
     {
         if ($this->iv === null) {
-            // GCM mode supports variable-length IV (typically 12 bytes = 96 bits)
-            if ($this->mode === Sm4::MODE_GCM) {
-                $this->iv = bin2hex(random_bytes(12));
-            } else {
-                $this->iv = bin2hex(random_bytes(16));
-            }
+            $this->iv = $this->mode === Sm4::MODE_GCM
+                ? bin2hex(random_bytes(12))
+                : bin2hex(random_bytes(16));
         }
         return $this->iv;
+    }
+
+    /**
+     * Reset the cached IV so that the next getIv() call generates a fresh random IV.
+     *
+     * This is especially important for GCM mode, where IV reuse with the same key
+     * is catastrophic for security. Call this method before each new encryption
+     * operation when reusing the same Sm4Options instance.
+     *
+     * @return self
+     */
+    public function resetIv(): self
+    {
+        $this->iv = null;
+        return $this;
     }
 
     /**

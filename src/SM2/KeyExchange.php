@@ -155,6 +155,52 @@ class KeyExchange
         return self::computeConfirmation(0x03, $xV, $yV, $ida, $idb, $RA, $RB);
     }
 
+    /**
+     * Initiator key exchange with automatic key confirmation.
+     *
+     * Computes the shared key AND the initiator confirmation hash (S1).
+     * The responder should verify S1, then compute S2 and send it back.
+     *
+     * @return array{key: string, xV: string, yV: string, s1: string}
+     */
+    public static function initiatorComputeKeyWithConfirmation(
+        string $dA,
+        string $rA,
+        string $PB,
+        string $RB,
+        int $klen,
+        string $ida = '1234567812345678',
+        string $idb = '1234567812345678'
+    ): array {
+        $result = self::computeKey($dA, $rA, $PB, $RB, $klen, $ida, $idb, true);
+        $RA = Sm2::getPublicKey($rA);
+        $s1 = self::computeInitiatorConfirmation($result['xV'], $result['yV'], $ida, $idb, $RA, $RB);
+        return ['key' => $result['key'], 'xV' => $result['xV'], 'yV' => $result['yV'], 's1' => $s1];
+    }
+
+    /**
+     * Responder key exchange with automatic key confirmation.
+     *
+     * Computes the shared key AND the responder confirmation hash (S2).
+     * The initiator should verify S2.
+     *
+     * @return array{key: string, xV: string, yV: string, s2: string}
+     */
+    public static function responderComputeKeyWithConfirmation(
+        string $dB,
+        string $rB,
+        string $PA,
+        string $RA,
+        int $klen,
+        string $ida = '1234567812345678',
+        string $idb = '1234567812345678'
+    ): array {
+        $result = self::computeKey($dB, $rB, $PA, $RA, $klen, $ida, $idb, false);
+        $RB = Sm2::getPublicKey($rB);
+        $s2 = self::computeResponderConfirmation($result['xV'], $result['yV'], $ida, $idb, $RA, $RB);
+        return ['key' => $result['key'], 'xV' => $result['xV'], 'yV' => $result['yV'], 's2' => $s2];
+    }
+
     private static function computeConfirmation(
         int $prefix,
         string $xV,

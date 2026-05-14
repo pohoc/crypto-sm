@@ -251,7 +251,7 @@ class Sm2 implements SignerInterface, CipherInterface
         }
 
         if (strlen($data) < 192 || strlen($data) % 2 !== 0) {
-            throw new InvalidKeyException('Invalid ciphertext');
+            throw new InvalidKeyException('Invalid ciphertext: length must be >= 192 hex chars and even');
         }
 
         $C1 = substr($data, 0, 128);
@@ -282,7 +282,7 @@ class Sm2 implements SignerInterface, CipherInterface
         $M = $C2Bin ^ $t;
 
         $u = Sm3::sm3(Hex::fromHex($x2) . $M . Hex::fromHex($y2));
-        if ($u !== $C3) {
+        if (!hash_equals($C3, $u)) {
             throw new CryptoException('SM2 decryption failed: ciphertext verification failed');
         }
 
