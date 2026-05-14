@@ -397,9 +397,7 @@ class CoverageCompleteTest extends TestCase
 
     public function testIsOnCurveFalseForNonHex(): void
     {
-        // gmp_init throws ValueError for non-hex strings
-        $this->expectException(\ValueError::class);
-        Sm2::isOnCurve(str_repeat('g', 128));
+        $this->assertFalse(Sm2::isOnCurve(str_repeat('g', 128)));
     }
 
     public function testIsOnCurveFalseForZeroPoint(): void

@@ -8,15 +8,15 @@ SM4 是中国分组密码算法标准 (GM/T 0002-2012)，是一种 128 位分组
 - **6 种加密模式**：ECB、CBC、CFB、OFB、CTR、GCM
 - **5 种填充模式**：PKCS5/PKCS7、Zero、ISO 10126、ANSI X9.23、None
 - **OpenSSL 加速**：ECB/CBC/CFB/OFB/CTR 使用 OpenSSL C 原生实现
-- **GCM 纯 PHP 回退**：当 OpenSSL 不支持 SM4-GCM 时自动使用 `Gcm`（`GcmPure` 已废弃别名）
+- **GCM 后端**：使用 OpenSSL SM4-ECB 做块加密，并由 `Gcm` 实现 CTR/GHASH（`GcmPure` 已废弃别名）
 - **GCM 预热**：`Sm4::warmupGcm($key)` 可消除首次调用建表延迟
 
 ## 实现与性能预期
 
-- `SM4-GCM` 优先使用 OpenSSL 后端
-- 如果运行环境不支持 `SM4-GCM`，库会回退到本库的 GHASH 实现
-- 回退路径的性能会显著低于 `CBC/CFB/OFB/CTR`
-- 如果业务依赖高吞吐 AEAD，应优先使用支持 `SM4-GCM` 的 OpenSSL 环境
+- GCM 当前由本库实现 CTR/GHASH，底层块加密调用 OpenSSL `SM4-ECB`
+- 运行环境必须支持 OpenSSL `SM4-ECB`
+- GCM 路径的性能会显著低于 `CBC/CFB/OFB/CTR`
+- 如果业务依赖高吞吐 AEAD，应先通过基准测试确认性能满足业务要求
 
 ## 基本用法
 
@@ -197,8 +197,8 @@ $ciphertext = Sm4::encrypt($data, $key, $options);
 
 - 同一把密钥下，IV 不能重复使用
 - 推荐使用 12 字节 IV
-- 纯 PHP 回退路径的正确性与 OpenSSL 一致，但吞吐量会低很多
-- 如果你看到 GCM 明显慢于 CBC/CTR，先确认当前环境是否支持 `SM4-GCM`
+- GCM 路径的正确性通过测试向量覆盖，但吞吐量会低于 CBC/CTR
+- 如果你看到 GCM 明显慢于 CBC/CTR，这是当前实现的预期性能特征
 
 ## 填充模式
 
@@ -355,8 +355,8 @@ try {
 - **密钥长度**: 128 位（16 字节）
 - **轮数**: 32 轮
 - **标准**: GM/T 0002-2012
-- **GCM 实现**: OpenSSL SM4-GCM 可用时自动使用，否则回退到纯 PHP（`Gcm` 类）
-- **GCM 纯 PHP**: 使用 OpenSSL SM4-ECB 做块加密 + 8-bit 查表法 GHASH + 16 层移位表 + reduction table 优化
+- **GCM 实现**: 使用 OpenSSL SM4-ECB 做块加密 + 本库 CTR/GHASH（`Gcm` 类）
+- **GCM GHASH**: 使用 8-bit 查表法 + 16 层移位表 + reduction table 优化
 - **GcmPure**: 已废弃别名，继承自 `Gcm`，将在未来版本移除
 
 ## 安全注意事项

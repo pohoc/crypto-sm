@@ -470,6 +470,11 @@ class ExtendedCoverageTest extends TestCase
         $this->assertFalse(Sm2::isOnCurve(str_repeat('a', 130)));
     }
 
+    public function testSm2IsOnCurveNonHex(): void
+    {
+        $this->assertFalse(Sm2::isOnCurve(str_repeat('z', 128)));
+    }
+
     public function testSm2IsOnCurveZeroPoint(): void
     {
         // 全零不在曲线上

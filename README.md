@@ -77,14 +77,14 @@ var_dump(extension_loaded('gmp'));
 - 加密/解密
 - ECB / CBC / CFB / OFB / CTR / GCM 模式
 - PKCS5/PKCS7 / Zero / ISO 10126 / ANSI X9.23 / None 填充
-- GCM 认证加密（OpenSSL 优先 + 纯 PHP 回退）
+- GCM 认证加密（OpenSSL SM4-ECB + 本库 GHASH 实现）
 
 #### SM4-GCM 性能预期
 
-- 优先使用 OpenSSL 的 `SM4-GCM`
-- 环境不支持 `SM4-GCM` 时自动回退到本库 GHASH 实现
-- 回退路径会显著慢于 `CBC/CFB/OFB/CTR`，属于预期行为
-- 高吞吐场景应优先部署在支持 `SM4-GCM` 的 OpenSSL 环境
+- GCM 当前由本库实现 CTR/GHASH，底层块加密调用 OpenSSL `SM4-ECB`
+- 运行环境必须支持 OpenSSL `SM4-ECB`
+- GCM 路径会显著慢于 `CBC/CFB/OFB/CTR`，属于预期行为
+- 高吞吐 AEAD 场景应先通过基准测试确认性能满足业务要求
 
 ## 快速开始
 
@@ -333,7 +333,7 @@ $plaintext = SmCrypto::sm4Decrypt($ciphertext, $key, $options);
 ## 特性
 
 - **零运行时依赖** — 仅需 `ext-gmp` 和 `ext-openssl`
-- **OpenSSL 加速** — SM3 和 SM4（CBC/ECB/CFB/OFB/CTR）使用 OpenSSL 原生实现，不可用时自动回退到纯 PHP；SM4-GCM 优先使用 OpenSSL，回退到纯 PHP GHASH 实现
+- **OpenSSL 加速** — SM3 和 SM4（CBC/ECB/CFB/OFB/CTR）使用 OpenSSL 原生实现；SM4-GCM 使用 OpenSSL SM4-ECB + 本库 GHASH 实现
 - **标准合规** — 全部通过 GM/T 0002/0003/0004 标准测试向量验证（529 测试，1,000,000+ 断言）
 - **安全** — GCM 认证标签时序安全比较、DER 签名自动检测、安全随机数生成、SM2 签名 60000+ 次零失败验证
 - **优雅 API** — 门面 + 子系统双层 API，选项对象链式调用，GCM warmup 预热接口
@@ -376,7 +376,7 @@ $plaintext = SmCrypto::sm4Decrypt($ciphertext, $key, $options);
 | GCM 加密 | 1 KB | ~240 μs | ~4 MB/s |
 | GCM 解密 | 1 KB | ~250 μs | ~4 MB/s |
 
-> \* GCM 纯 PHP 回退路径（本测试环境 OpenSSL 不支持 SM4-GCM），使用 8-bit 查表 + 16 层移位表优化。首次调用含建表开销（~1.7ms），可通过 `Sm4::warmupGcm($key)` 预热消除。若 OpenSSL 支持 SM4-GCM，性能将与其他模式相当。
+> \* GCM 路径使用 OpenSSL SM4-ECB 做块加密，并由本库实现 CTR/GHASH，使用 8-bit 查表 + 16 层移位表优化。首次调用含建表开销（~1.7ms），可通过 `Sm4::warmupGcm($key)` 预热消除。
 
 ### 性能基线
 

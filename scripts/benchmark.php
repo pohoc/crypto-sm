@@ -222,13 +222,13 @@ function printSystemInfo(): void
     $sm3Available = function_exists('openssl_digest') && in_array('sm3', openssl_get_md_methods(), true);
     echo '  OpenSSL SM3:      ' . ($sm3Available ? '✓ (加速)' : '✗ (纯PHP回退)') . "\n";
 
-    // 检测 OpenSSL SM4-GCM 支持
+    // 检测 OpenSSL SM4-GCM 支持；当前库的 GCM 路径仍使用 Gcm 后端。
     $gcmKey = hex2bin('0123456789abcdeffedcba9876543210');
     $gcmIv = random_bytes(12);
     $gcmTag = '';
     $gcmResult = @openssl_encrypt('probe', 'SM4-GCM', $gcmKey, OPENSSL_RAW_DATA, $gcmIv, $gcmTag, '', 16);
     $gcmAvailable = ($gcmResult !== false);
-    echo '  OpenSSL SM4-GCM:  ' . ($gcmAvailable ? '✓ (硬件加速)' : '✗ (纯PHP回退)') . "\n";
+    echo '  OpenSSL SM4-GCM:  ' . ($gcmAvailable ? '✓ (可用，当前未作为后端)' : '✗') . "\n";
 
     echo '  当前时间:         ' . date('Y-m-d H:i:s') . "\n";
 }
@@ -447,7 +447,7 @@ $gcmIv = hex2bin($sm4GcmIv);
 $gcmTag = '';
 $gcmProbeResult = @openssl_encrypt('probe', 'SM4-GCM', $gcmKey, OPENSSL_RAW_DATA, $gcmIv, $gcmTag, '', 16);
 $gcmAvailable = ($gcmProbeResult !== false);
-echo '  SM4-GCM 后端: ' . ($gcmAvailable ? 'OpenSSL (硬件加速)' : '纯PHP (Gcm)') . "\n\n";
+echo '  SM4-GCM 后端: Gcm (OpenSSL SM4-ECB + 本库 GHASH)' . ($gcmAvailable ? '；OpenSSL SM4-GCM 可用但当前未作为后端' : '') . "\n\n";
 
 $sm4GcmEncResults = [];
 $sm4GcmDecResults = [];

@@ -123,7 +123,7 @@ class Sm2 implements SignerInterface, CipherInterface
      */
     public static function isOnCurve(string $publicKey): bool
     {
-        if (strlen($publicKey) !== 128) {
+        if (!preg_match('/^[0-9a-fA-F]{128}$/', $publicKey)) {
             return false;
         }
         $p = self::gmpParam('p');
@@ -155,11 +155,26 @@ class Sm2 implements SignerInterface, CipherInterface
     /** @return array{privateKey: string, publicKey: string} */
     private static function generateKeyPair(): array
     {
-        $n = self::gmpParam('n');
-        $d = gmp_random_range(gmp_init(1), gmp_sub($n, gmp_init(1)));
+        $d = self::randomScalar();
         $privateKey = str_pad(gmp_strval($d, 16), 64, '0', STR_PAD_LEFT);
         $publicKey = self::pointMultiply($privateKey);
         return ['privateKey' => $privateKey, 'publicKey' => $publicKey];
+    }
+
+    /**
+     * Generate a cryptographic scalar in [1, n-1] using rejection sampling.
+     */
+    private static function randomScalar(): \GMP
+    {
+        $n = self::gmpParam('n');
+        $hexLength = strlen(self::$eccTable['n']);
+        $byteLength = max(1, intdiv($hexLength + 1, 2));
+
+        do {
+            $candidate = gmp_init(bin2hex(random_bytes($byteLength)), 16);
+        } while (gmp_cmp($candidate, 1) < 0 || gmp_cmp($candidate, $n) >= 0);
+
+        return $candidate;
     }
 
     /**
@@ -182,10 +197,9 @@ class Sm2 implements SignerInterface, CipherInterface
         }
 
         $dataLen = strlen($data);
-        $n = self::gmpParam('n');
 
         // GM/T 0003-2012 5.4.2: k must be in [1, n-1]
-        $kGmp = gmp_random_range(gmp_init(1), gmp_sub($n, gmp_init(1)));
+        $kGmp = self::randomScalar();
         $k = str_pad(gmp_strval($kGmp, 16), 64, '0', STR_PAD_LEFT);
 
         $x1y1 = self::pointMultiply($k);
@@ -206,7 +220,7 @@ class Sm2 implements SignerInterface, CipherInterface
                 if ($retry >= $maxRetries) {
                     throw new CryptoException('SM2 encryption failed: KDF derived all-zero key after max retries');
                 }
-                $kGmp = gmp_random_range(gmp_init(1), gmp_sub($n, gmp_init(1)));
+                $kGmp = self::randomScalar();
                 $k = str_pad(gmp_strval($kGmp, 16), 64, '0', STR_PAD_LEFT);
                 $x1y1 = self::pointMultiply($k);
                 $x1 = substr($x1y1, 0, 64);
@@ -382,10 +396,9 @@ class Sm2 implements SignerInterface, CipherInterface
         $maxRetries = 100;
         $p = self::gmpParam('p');
         $a = self::gmpParam('a');
-        $nMinus1 = gmp_sub($n, gmp_init(1));
 
         for ($retry = 0; $retry < $maxRetries; $retry++) {
-            $k = gmp_random_range(gmp_init(1), $nMinus1);
+            $k = self::randomScalar();
             $x1y1 = self::fixedBaseMultiply($k, $p, $a);
             if ($x1y1 === null) {
                 continue;
@@ -557,7 +570,7 @@ class Sm2 implements SignerInterface, CipherInterface
             $pointY = gmp_init(substr($point, 64), 16);
         }
 
-        $factor ??= bin2hex(random_bytes(32));
+        $factor ??= str_pad(gmp_strval(self::randomScalar(), 16), 64, '0', STR_PAD_LEFT);
         $factorDec = gmp_init($factor, 16);
         $n = self::gmpParam('n');
         if (gmp_cmp($factorDec, 1) < 0 || gmp_cmp($factorDec, $n) >= 0) {
@@ -848,7 +861,7 @@ class Sm2 implements SignerInterface, CipherInterface
      */
     private static function parsePoint(string $hex): ?array
     {
-        if (strlen($hex) !== 128) {
+        if (!preg_match('/^[0-9a-fA-F]{128}$/', $hex)) {
             return null;
         }
         return [
