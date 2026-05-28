@@ -5,14 +5,14 @@ declare(strict_types=1);
 namespace CryptoSm\Crypto;
 
 use CryptoSm\Exception\CryptoException;
+use CryptoSm\SM4\Sm4PurePhp;
 
 /**
  * GCM (Galois/Counter Mode) implementation for SM4.
  *
  * Uses GMP for GF(2^128) multiplication with optimized lookup tables.
- * The SM4 block cipher is delegated to OpenSSL's SM4-ECB (this class
- * is NOT a pure-PHP implementation — it requires the OpenSSL extension
- * with SM4 support for the underlying block encryption).
+ * The SM4 block cipher uses OpenSSL's SM4-ECB when available and falls
+ * back to the library's pure-PHP SM4 block implementation otherwise.
  *
  * Performance optimizations:
  * - 8-bit (256-entry) lookup table for GHASH multiplication
@@ -30,6 +30,8 @@ class Gcm
     private const GF_POLY_HEX = '0xe1000000000000000000000000000000';
 
     private string $keyBin;
+
+    private ?Sm4PurePhp $purePhpEngine = null;
 
     private ?\GMP $hGmp = null;
 
@@ -82,11 +84,18 @@ class Gcm
 
     private function blockEncrypt(string $block): string
     {
-        $result = openssl_encrypt($block, 'SM4-ECB', $this->keyBin, OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING);
-        if ($result === false) {
-            throw new CryptoException('SM4 block encryption failed');
+        if (function_exists('openssl_encrypt') && in_array('SM4-ECB', openssl_get_cipher_methods(), true)) {
+            $result = openssl_encrypt($block, 'SM4-ECB', $this->keyBin, OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING);
+            if ($result !== false) {
+                return $result;
+            }
         }
-        return $result;
+
+        if ($this->purePhpEngine === null) {
+            $this->purePhpEngine = new Sm4PurePhp();
+            $this->purePhpEngine->setKey($this->keyBin);
+        }
+        return $this->purePhpEngine->encryptBlock($block);
     }
 
     private function getHashSubkey(): \GMP
