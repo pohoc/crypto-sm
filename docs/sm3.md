@@ -80,7 +80,7 @@ $hash = $hasher->finalize();
 echo "文件 SM3 哈希: $hash\n";
 ```
 
-> **性能提示**：流式哈希同样享受 OpenSSL 加速（在 `finalize` 时一次性计算），性能与一次性哈希接近。
+> **性能提示**：流式哈希同样享受原生 `hash_init('sm3')` / `hash_update()` 加速；OpenSSL 不支持 SM3 时自动回退到纯 PHP 分块实现。
 
 ## HMAC-SM3
 
@@ -201,7 +201,7 @@ echo "  流式   => " . $hmac->finalize() . "\n";
 - **算法结构**: Merkle-Damgård 结构
 - **标准**: GM/T 0004-2012、ISO/IEC 10118-3:2018
 - **OpenSSL 加速**: 自动检测 `openssl_digest('sm3')`，PHP 8.1+ / OpenSSL 1.1.1+ 支持
-- **流式哈希性能**: OpenSSL 可用时与一次性哈希性能接近（~400 MB/s）
+- **流式哈希性能**: 原生 SM3 可用时使用增量 hash context，避免累积完整输入；OpenSSL 不支持 SM3 时使用纯 PHP 分块回退
 
 ## 安全注意事项
 

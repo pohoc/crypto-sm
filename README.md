@@ -77,12 +77,12 @@ var_dump(extension_loaded('gmp'));
 - 加密/解密
 - ECB / CBC / CFB / OFB / CTR / GCM 模式
 - PKCS5/PKCS7 / Zero / ISO 10126 / ANSI X9.23 / None 填充
-- GCM 认证加密（OpenSSL SM4-ECB + 本库 GHASH 实现）
+- GCM 认证加密（OpenSSL SM4-ECB 加速 + 纯 PHP SM4 fallback + 本库 GHASH 实现）
 
 #### SM4-GCM 性能预期
 
-- GCM 当前由本库实现 CTR/GHASH，底层块加密调用 OpenSSL `SM4-ECB`
-- 运行环境必须支持 OpenSSL `SM4-ECB`
+- GCM 当前由本库实现 CTR/GHASH，底层块加密优先调用 OpenSSL `SM4-ECB`
+- OpenSSL 不支持 SM4 时会自动使用纯 PHP SM4 block fallback
 - GCM 路径会显著慢于 `CBC/CFB/OFB/CTR`，属于预期行为
 - 高吞吐 AEAD 场景应先通过基准测试确认性能满足业务要求
 
@@ -246,14 +246,19 @@ $options = (new Sm4Options())->setMode(Sm4::MODE_CTR)->setIv($iv);
 $ciphertext = Sm4::encrypt($data, $key, $options);
 
 // GCM 模式（认证加密，推荐）
+$gcmIv = '000102030405060708090a0b'; // 推荐 12 字节（24 十六进制字符）
 $options = (new Sm4Options())
     ->setMode(Sm4::MODE_GCM)
-    ->setIv($iv)                // 推荐 12 字节（24 十六进制字符）
+    ->setIv($gcmIv)
     ->setAad('additional data') // 附加认证数据
     ->setTagLength(16);         // 认证标签长度（4/8/12/13/14/15/16 字节）
 $ciphertext = Sm4::encrypt($data, $key, $options);
 // 密文格式：ciphertext_hex + tag_hex
 $plaintext = Sm4::decrypt($ciphertext, $key, $options);
+
+// 自包含 payload API（推荐用于业务封装，自动携带 IV/tag 元数据）
+$payload = Sm4::encryptPayload($data, $key, (new Sm4Options())->setMode(Sm4::MODE_GCM));
+$plaintext = Sm4::decryptPayload($payload, $key);
 
 // GCM 预热（消除首次调用建表延迟，可选）
 Sm4::warmupGcm($key);
@@ -265,7 +270,7 @@ Sm4::warmupGcm($key);
 // PKCS5/PKCS7 填充（默认）
 $options = (new Sm4Options())->setPadding('pkcs5');
 
-// 零填充
+// 零填充（有歧义，仅用于兼容旧数据；新代码不要使用）
 $options = (new Sm4Options())->setPadding('zero');
 
 // ISO 10126 填充（随机填充字节）
@@ -330,11 +335,13 @@ $ciphertext = SmCrypto::sm4Encrypt($data, $key, $options);
 $plaintext = SmCrypto::sm4Decrypt($ciphertext, $key, $options);
 ```
 
+> SM4 不传 `Sm4Options` 时使用默认 CBC，并返回 `iv_hex + ciphertext_hex`，可直接传给 `sm4Decrypt()`。显式传入 `Sm4Options` 时返回值只包含密文，调用方必须保存并复用同一个 IV。
+
 ## 特性
 
 - **零运行时依赖** — 仅需 `ext-gmp` 和 `ext-openssl`
-- **OpenSSL 加速** — SM3 和 SM4（CBC/ECB/CFB/OFB/CTR）使用 OpenSSL 原生实现；SM4-GCM 使用 OpenSSL SM4-ECB + 本库 GHASH 实现
-- **标准合规** — 全部通过 GM/T 0002/0003/0004 标准测试向量验证（529 测试，1,000,000+ 断言）
+- **OpenSSL 加速** — SM3 和 SM4（CBC/ECB/CFB/OFB/CTR）优先使用 OpenSSL 原生实现；OpenSSL 不支持 SM4 时自动回退到纯 PHP
+- **标准合规** — 全部通过 GM/T 0002/0003/0004 标准测试向量验证（600+ 测试，1,000,000+ 断言）
 - **安全** — GCM 认证标签时序安全比较、DER 签名自动检测、安全随机数生成、SM2 签名 60000+ 次零失败验证
 - **优雅 API** — 门面 + 子系统双层 API，选项对象链式调用，GCM warmup 预热接口
 
@@ -376,7 +383,7 @@ $plaintext = SmCrypto::sm4Decrypt($ciphertext, $key, $options);
 | GCM 加密 | 1 KB | ~240 μs | ~4 MB/s |
 | GCM 解密 | 1 KB | ~250 μs | ~4 MB/s |
 
-> \* GCM 路径使用 OpenSSL SM4-ECB 做块加密，并由本库实现 CTR/GHASH，使用 8-bit 查表 + 16 层移位表优化。首次调用含建表开销（~1.7ms），可通过 `Sm4::warmupGcm($key)` 预热消除。
+> \* GCM 路径优先使用 OpenSSL SM4-ECB 做块加密；不可用时使用纯 PHP SM4 block fallback。CTR/GHASH 由本库实现，首次调用含建表开销（~1.7ms），可通过 `Sm4::warmupGcm($key)` 预热消除。
 
 ### 性能基线
 
@@ -438,12 +445,12 @@ composer install
 vendor/bin/phpunit
 ```
 
-529 测试，1,000,000+ 断言，覆盖全部标准测试向量。
+600+ 测试，1,000,000+ 断言，覆盖全部标准测试向量。
 
 ## 代码质量
 
 ```bash
-# 静态分析（PHPStan level 8）
+# 静态分析（PHPStan level 9）
 vendor/bin/phpstan analyse
 
 # 代码风格检查
@@ -461,7 +468,7 @@ composer check
 GitHub Actions 自动化流水线，每次 push/PR 自动运行：
 
 - **多版本测试** — PHP 8.0 / 8.1 / 8.2 / 8.3 / 8.4 / 8.5 矩阵测试
-- **静态分析** — PHPStan level 8 + PSR-12 代码风格检查
+- **静态分析** — PHPStan level 9 + PSR-12 代码风格检查
 - **安全审计** — Composer audit 依赖漏洞扫描
 
 ## 文档

@@ -248,8 +248,26 @@ $resultB = KeyExchange::responderComputeKeyFull(
 );
 
 // 计算密钥确认哈希
-$s1 = KeyExchange::computeInitiatorConfirmation($resultA['xV'], $resultA['yV'], $resultA['key']);
-$s2 = KeyExchange::computeResponderConfirmation($resultA['xV'], $resultA['yV'], $resultA['key']);
+$s1 = KeyExchange::computeInitiatorConfirmation(
+    $resultA['xV'],
+    $resultA['yV'],
+    '1234567812345678',
+    '1234567812345678',
+    $ephemeralA->getPublicKey(),
+    $ephemeralB->getPublicKey(),
+    $keypairA->getPublicKey(),
+    $keypairB->getPublicKey()
+);
+$s2 = KeyExchange::computeResponderConfirmation(
+    $resultA['xV'],
+    $resultA['yV'],
+    '1234567812345678',
+    '1234567812345678',
+    $ephemeralA->getPublicKey(),
+    $ephemeralB->getPublicKey(),
+    $keypairA->getPublicKey(),
+    $keypairB->getPublicKey()
+);
 
 // 发起方验证 S2，响应方验证 S1
 ```

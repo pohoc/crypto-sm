@@ -7,14 +7,15 @@ SM4 是中国分组密码算法标准 (GM/T 0002-2012)，是一种 128 位分组
 本实现特性：
 - **6 种加密模式**：ECB、CBC、CFB、OFB、CTR、GCM
 - **5 种填充模式**：PKCS5/PKCS7、Zero、ISO 10126、ANSI X9.23、None
-- **OpenSSL 加速**：ECB/CBC/CFB/OFB/CTR 使用 OpenSSL C 原生实现
-- **GCM 后端**：使用 OpenSSL SM4-ECB 做块加密，并由 `Gcm` 实现 CTR/GHASH（`GcmPure` 已废弃别名）
+- **OpenSSL 加速**：ECB/CBC/CFB/OFB/CTR 优先使用 OpenSSL C 原生实现
+- **纯 PHP 回退**：OpenSSL 不支持 SM4 时，ECB/CBC/CFB/OFB/CTR/GCM 自动使用纯 PHP SM4 block fallback
+- **GCM 后端**：优先使用 OpenSSL SM4-ECB 做块加密，并由 `Gcm` 实现 CTR/GHASH（`GcmPure` 已废弃别名）
 - **GCM 预热**：`Sm4::warmupGcm($key)` 可消除首次调用建表延迟
 
 ## 实现与性能预期
 
-- GCM 当前由本库实现 CTR/GHASH，底层块加密调用 OpenSSL `SM4-ECB`
-- 运行环境必须支持 OpenSSL `SM4-ECB`
+- GCM 当前由本库实现 CTR/GHASH，底层块加密优先调用 OpenSSL `SM4-ECB`
+- OpenSSL 不支持 SM4 时会自动回退到纯 PHP SM4 block
 - GCM 路径的性能会显著低于 `CBC/CFB/OFB/CTR`
 - 如果业务依赖高吞吐 AEAD，应先通过基准测试确认性能满足业务要求
 
@@ -37,6 +38,7 @@ $plaintext = Sm4::decrypt($ciphertext, $key, $options);
 ```
 
 > **注意**：默认模式已从 ECB 改为 CBC。ECB 模式不安全，仅建议在兼容旧系统时使用。
+> 不传 `Sm4Options` 时，默认 CBC 返回 `iv_hex + ciphertext_hex`，可直接传给 `Sm4::decrypt()`；显式传入 `Sm4Options` 时返回值只包含密文，调用方必须保存 IV。
 
 ## 加密模式
 
@@ -136,7 +138,7 @@ use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
 
 $key = '0123456789abcdeffedcba9876543210';
-$iv = '0123456789abcdef';               // 12 字节 IV（推荐）
+$iv = '000102030405060708090a0b';       // 12 字节 IV（推荐）
 $options = (new Sm4Options())
     ->setMode('gcm')
     ->setIv($iv);
@@ -154,7 +156,7 @@ use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
 
 $key = '0123456789abcdeffedcba9876543210';
-$iv = '0123456789abcdef';
+$iv = '000102030405060708090a0b';
 $aad = 'associated_data_to_protect';
 
 $options = (new Sm4Options())
@@ -217,7 +219,7 @@ $plaintext = Sm4::decrypt($ciphertext, $key, $options);
 
 ### Zero 填充
 
-用零字节填充到块大小：
+用零字节填充到块大小。该模式无法区分真实尾部 `\0` 和填充字节，仅用于兼容旧数据；新代码应使用 PKCS5/PKCS7 或 GCM。
 
 ```php
 $options = (new Sm4Options())->setPadding('zero');
@@ -252,6 +254,7 @@ $options = (new Sm4Options())->setPadding('none');
 
 ```php
 use CryptoSm\SmCrypto;
+use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
 
 $key = '0123456789abcdeffedcba9876543210';
@@ -260,8 +263,12 @@ $key = '0123456789abcdeffedcba9876543210';
 $ciphertext = SmCrypto::sm4Encrypt('Hello World', $key);
 $plaintext = SmCrypto::sm4Decrypt($ciphertext, $key);
 
+// 自包含 payload API（推荐）：自动携带 IV/tag 元数据
+$payload = SmCrypto::sm4EncryptPayload('Hello World', $key, (new Sm4Options())->setMode(Sm4::MODE_GCM));
+$plaintext = SmCrypto::sm4DecryptPayload($payload, $key);
+
 // GCM 加密
-$options = (new Sm4Options())->setMode(Sm4::MODE_GCM)->setIv('0123456789abcdef');
+$options = (new Sm4Options())->setMode(Sm4::MODE_GCM)->setIv('000102030405060708090a0b');
 $ciphertext = SmCrypto::sm4Encrypt('Hello World', $key, $options);
 $plaintext = SmCrypto::sm4Decrypt($ciphertext, $key, $options);
 
@@ -315,7 +322,7 @@ use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
 
 $key = '0123456789abcdeffedcba9876543210';
-$iv = '0123456789abcdef';
+$iv = '000102030405060708090a0b';
 $plaintext = 'Hello World';
 
 $options = (new Sm4Options())
@@ -355,7 +362,7 @@ try {
 - **密钥长度**: 128 位（16 字节）
 - **轮数**: 32 轮
 - **标准**: GM/T 0002-2012
-- **GCM 实现**: 使用 OpenSSL SM4-ECB 做块加密 + 本库 CTR/GHASH（`Gcm` 类）
+- **GCM 实现**: 优先使用 OpenSSL SM4-ECB 做块加密；不可用时使用纯 PHP SM4 block fallback；CTR/GHASH 由本库 `Gcm` 类实现
 - **GCM GHASH**: 使用 8-bit 查表法 + 16 层移位表 + reduction table 优化
 - **GcmPure**: 已废弃别名，继承自 `Gcm`，将在未来版本移除
 
@@ -366,7 +373,8 @@ try {
 3. **ECB 模式不安全**，相同明文产生相同密文，仅用于兼容旧系统
 4. 在 CBC/CFB/OFB/CTR 模式下，每次加密操作都应使用随机的 IV
 5. GCM 模式的 IV 绝不能重复使用同一密钥加密不同数据
-6. 安全存储密钥（使用环境变量或安全的密钥管理）
+6. 显式传入 `Sm4Options` 时，密文不内嵌 IV，调用方必须单独保存并在解密时设置同一个 IV
+7. 安全存储密钥（使用环境变量或安全的密钥管理）
 
 ## 错误处理
 
