@@ -42,9 +42,27 @@ class Keypair implements \JsonSerializable
         return $this->publicKey;
     }
 
+    /**
+     * @return string Public key only; private key is intentionally excluded from string context
+     * @deprecated This method leaks the private key into string context (logs, errors, etc.).
+     *             Use getPrivateKey() / getPublicKey() explicitly. Will be removed in v3.0.
+     */
     public function __toString(): string
     {
-        return $this->privateKey . $this->publicKey;
+        return $this->publicKey;
+    }
+
+    /**
+     * Controls var_dump output — hides the private key to prevent accidental leakage.
+     *
+     * @return array{privateKey: string, publicKey: string}
+     */
+    public function __debugInfo(): array
+    {
+        return [
+            'privateKey' => '***REDACTED***',
+            'publicKey'  => $this->publicKey,
+        ];
     }
 
     /**
@@ -52,6 +70,6 @@ class Keypair implements \JsonSerializable
      */
     public function jsonSerialize(): array
     {
-        return ['privateKey' => $this->privateKey, 'publicKey' => $this->publicKey];
+        return ['privateKey' => '***REDACTED***', 'publicKey' => $this->publicKey];
     }
 }

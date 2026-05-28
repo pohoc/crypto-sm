@@ -6,6 +6,7 @@ namespace CryptoSm\Tests;
 
 use CryptoSm\Exception\CryptoException;
 use CryptoSm\Exception\InvalidKeyException;
+use CryptoSm\SM2\KeyExchange;
 use CryptoSm\SM2\SignatureOptions;
 use CryptoSm\SM2\Sm2;
 use CryptoSm\SM2\Sm2CipherOptions;
@@ -131,6 +132,35 @@ class Sm2VectorsTest extends TestCase
         // GM/T 0009-2012 规定默认 userId = '1234567812345678'
         $opts = new SignatureOptions();
         $this->assertEquals('1234567812345678', $opts->getUserId());
+    }
+
+    public function testKeyExchangeFixedKnownAnswerVector(): void
+    {
+        $dA = str_pad('1', 64, '0', STR_PAD_LEFT);
+        $dB = str_pad('2', 64, '0', STR_PAD_LEFT);
+        $rA = str_pad('3', 64, '0', STR_PAD_LEFT);
+        $rB = str_pad('4', 64, '0', STR_PAD_LEFT);
+        $idA = 'Alice123@example';
+        $idB = 'Bob456@example';
+
+        $PA = Sm2::getPublicKey($dA);
+        $PB = Sm2::getPublicKey($dB);
+        $RA = Sm2::getPublicKey($rA);
+        $RB = Sm2::getPublicKey($rB);
+
+        $resultA = KeyExchange::initiatorComputeKeyFull($dA, $rA, $PB, $RB, 32, $idA, $idB);
+        $resultB = KeyExchange::responderComputeKeyFull($dB, $rB, $PA, $RA, 32, $idA, $idB);
+        $s1 = KeyExchange::computeInitiatorConfirmation($resultA['xV'], $resultA['yV'], $idA, $idB, $RA, $RB, $PA, $PB);
+        $s2 = KeyExchange::computeResponderConfirmation($resultA['xV'], $resultA['yV'], $idA, $idB, $RA, $RB, $PA, $PB);
+
+        $this->assertSame('3db959ec1684a863b588c10fd619034c01ae03d5a5c0853d72dbfedd1bf5d3cc', $resultA['key']);
+        $this->assertSame($resultA['key'], $resultB['key']);
+        $this->assertSame('d12a559fc21aa1102212220bd4e6d333f633797252df7782f34730b379b87cb2', $resultA['xV']);
+        $this->assertSame('5e3745ddc03acd3ae56fe323250f1b1731aa640a6461d0711a5d257fb84672e6', $resultA['yV']);
+        $this->assertSame($resultA['xV'], $resultB['xV']);
+        $this->assertSame($resultA['yV'], $resultB['yV']);
+        $this->assertSame('1d21c24d35e236799b31bef3ec792e7ce2bb2fb849b11365dea705dc396e2075', $s1);
+        $this->assertSame('e19da0d1f5ca755083a82527f185660305d07d2e6752adeee8e56f468176663d', $s2);
     }
 
     public function testDerSignatureFormat(): void

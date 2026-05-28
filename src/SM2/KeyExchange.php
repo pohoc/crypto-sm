@@ -41,7 +41,7 @@ class KeyExchange
      * Per GM/T 0003-2012 Section 6.1:
      * sA = (h * dA + x̄A * rA) mod n
      * V  = (h * sA) * (PB + x̄B * RB)
-     * K  = KDF(xV || yV || ENTLA || IDA || ENTLB || IDB || xRA || yRA || xRB || yRB, klen)
+     * K  = KDF(xV || yV || ZA || ZB, klen)
      *
      * @param  string              $dA   Initiator's static private key (64-char hex)
      * @param  string              $rA   Initiator's ephemeral private key (64-char hex)
@@ -72,7 +72,7 @@ class KeyExchange
      * Per GM/T 0003-2012 Section 6.2:
      * sB = (h * dB + x̄B * rB) mod n
      * V  = (h * sB) * (PA + x̄A * RA)
-     * K  = KDF(xV || yV || ENTLA || IDA || ENTLB || IDB || xRA || yRA || xRB || yRB, klen)
+     * K  = KDF(xV || yV || ZA || ZB, klen)
      *
      * @param  string              $dB   Responder's static private key (64-char hex)
      * @param  string              $rB   Responder's ephemeral private key (64-char hex)
@@ -139,9 +139,11 @@ class KeyExchange
         string $ida,
         string $idb,
         string $RA,
-        string $RB
+        string $RB,
+        string $PA,
+        string $PB
     ): string {
-        return self::computeConfirmation(0x02, $xV, $yV, $ida, $idb, $RA, $RB);
+        return self::computeConfirmation(0x02, $xV, $yV, $ida, $idb, $RA, $RB, $PA, $PB);
     }
 
     public static function computeResponderConfirmation(
@@ -150,9 +152,11 @@ class KeyExchange
         string $ida,
         string $idb,
         string $RA,
-        string $RB
+        string $RB,
+        string $PA,
+        string $PB
     ): string {
-        return self::computeConfirmation(0x03, $xV, $yV, $ida, $idb, $RA, $RB);
+        return self::computeConfirmation(0x03, $xV, $yV, $ida, $idb, $RA, $RB, $PA, $PB);
     }
 
     /**
@@ -174,7 +178,8 @@ class KeyExchange
     ): array {
         $result = self::computeKey($dA, $rA, $PB, $RB, $klen, $ida, $idb, true);
         $RA = Sm2::getPublicKey($rA);
-        $s1 = self::computeInitiatorConfirmation($result['xV'], $result['yV'], $ida, $idb, $RA, $RB);
+        $PA = Sm2::getPublicKey($dA);
+        $s1 = self::computeInitiatorConfirmation($result['xV'], $result['yV'], $ida, $idb, $RA, $RB, $PA, $PB);
         return ['key' => $result['key'], 'xV' => $result['xV'], 'yV' => $result['yV'], 's1' => $s1];
     }
 
@@ -197,7 +202,8 @@ class KeyExchange
     ): array {
         $result = self::computeKey($dB, $rB, $PA, $RA, $klen, $ida, $idb, false);
         $RB = Sm2::getPublicKey($rB);
-        $s2 = self::computeResponderConfirmation($result['xV'], $result['yV'], $ida, $idb, $RA, $RB);
+        $PB = Sm2::getPublicKey($dB);
+        $s2 = self::computeResponderConfirmation($result['xV'], $result['yV'], $ida, $idb, $RA, $RB, $PA, $PB);
         return ['key' => $result['key'], 'xV' => $result['xV'], 'yV' => $result['yV'], 's2' => $s2];
     }
 
@@ -208,19 +214,19 @@ class KeyExchange
         string $ida,
         string $idb,
         string $RA,
-        string $RB
+        string $RB,
+        string $PA,
+        string $PB
     ): string {
         $prefixByte = chr(self::toByte($prefix));
-        $entla = self::encodeEntl($ida);
-        $entlb = self::encodeEntl($idb);
+        $za = Sm2::getUserIdDigest($ida, $PA);
+        $zb = Sm2::getUserIdDigest($idb, $PB);
         $xRA = substr($RA, 0, 64);
         $yRA = substr($RA, 64);
         $xRB = substr($RB, 0, 64);
         $yRB = substr($RB, 64);
 
-        $innerInput = $prefixByte . Hex::fromHex($yV) . Hex::fromHex($xV)
-            . Hex::fromHex($entla) . $ida . Hex::fromHex($entlb) . $idb
-            . Hex::fromHex($xRA) . Hex::fromHex($yRA) . Hex::fromHex($xRB) . Hex::fromHex($yRB);
+        $innerInput = Hex::fromHex($xV . $za . $zb . $xRA . $yRA . $xRB . $yRB);
         $innerHash = Sm3::sm3($innerInput);
 
         $outerInput = $prefixByte . Hex::fromHex($yV) . Hex::fromHex($innerHash);
@@ -326,38 +332,27 @@ class KeyExchange
         $xV = substr($V, 0, 64);
         $yV = substr($V, 64);
 
-        // KDF input: xV || yV || ENTLA || IDA || ENTLB || IDB || xRA || yRA || xRB || yRB
-        // RA is always the initiator's ephemeral key, RB is always the responder's
+        // KDF input: xV || yV || ZA || ZB
+        $P_self = Sm2::getPublicKey($d);
         if ($isInitiator) {
             $RA = $R_self;
             $RB = $R_other;
+            $PA = $P_self;
+            $PB = $P_other;
         } else {
             $RA = $R_other;
             $RB = $R_self;
+            $PA = $P_other;
+            $PB = $P_self;
         }
 
-        $entla = self::encodeEntl($ida);
-        $entlb = self::encodeEntl($idb);
-        $xRA = substr($RA, 0, 64);
-        $yRA = substr($RA, 64);
-        $xRB = substr($RB, 0, 64);
-        $yRB = substr($RB, 64);
-
-        $kdfInput = $xV . $yV . $entla . bin2hex($ida) . $entlb . bin2hex($idb)
-            . $xRA . $yRA . $xRB . $yRB;
+        $za = Sm2::getUserIdDigest($ida, $PA);
+        $zb = Sm2::getUserIdDigest($idb, $PB);
+        $kdfInput = $xV . $yV . $za . $zb;
 
         $key = self::kdfKeyExchange($kdfInput, $klen);
 
         return ['key' => $key, 'xV' => $xV, 'yV' => $yV];
-    }
-
-    /**
-     * Encode ENTL (bit length of ID) as 2-byte hex.
-     */
-    private static function encodeEntl(string $id): string
-    {
-        $bitLen = strlen($id) * 8;
-        return sprintf('%04x', $bitLen);
     }
 
     /**

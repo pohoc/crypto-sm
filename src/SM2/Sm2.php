@@ -142,18 +142,28 @@ class Sm2 implements SignerInterface, CipherInterface
     }
 
     /**
-     * Generate a new SM2 key pair.
+     * Generate a new SM2 key pair (static).
      *
      * @return Keypair Generated key pair with hex-encoded keys
      */
     public static function generateKeyPairHex(): Keypair
     {
-        $pair = self::generateKeyPair();
+        $pair = self::generateKeyPairMaterial();
         return new Keypair($pair['privateKey'], $pair['publicKey']);
     }
 
+    /**
+     * Generate a new SM2 key pair (instance method for testability via interface).
+     *
+     * @return Keypair Generated key pair with hex-encoded keys
+     */
+    public function generateKeyPair(): Keypair
+    {
+        return self::generateKeyPairHex();
+    }
+
     /** @return array{privateKey: string, publicKey: string} */
-    private static function generateKeyPair(): array
+    private static function generateKeyPairMaterial(): array
     {
         $d = self::randomScalar();
         $privateKey = str_pad(gmp_strval($d, 16), 64, '0', STR_PAD_LEFT);
@@ -163,18 +173,24 @@ class Sm2 implements SignerInterface, CipherInterface
 
     /**
      * Generate a cryptographic scalar in [1, n-1] using rejection sampling.
+     *
+     * @throws CryptoException If max retries exceeded (extremely unlikely with 256-bit random)
      */
     private static function randomScalar(): \GMP
     {
         $n = self::gmpParam('n');
         $hexLength = strlen(self::$eccTable['n']);
         $byteLength = max(1, intdiv($hexLength + 1, 2));
+        $maxRetries = 1000;
 
-        do {
+        for ($retry = 0; $retry < $maxRetries; $retry++) {
             $candidate = gmp_init(bin2hex(random_bytes($byteLength)), 16);
-        } while (gmp_cmp($candidate, 1) < 0 || gmp_cmp($candidate, $n) >= 0);
+            if (gmp_cmp($candidate, 1) >= 0 && gmp_cmp($candidate, $n) < 0) {
+                return $candidate;
+            }
+        }
 
-        return $candidate;
+        throw new CryptoException('SM2 random scalar generation failed: max retries exceeded');
     }
 
     /**
@@ -313,7 +329,7 @@ class Sm2 implements SignerInterface, CipherInterface
      */
     public static function encrypt(string $data, string $publicKey, mixed $options = null): string
     {
-        return self::doEncrypt($data, $publicKey, $options);
+        return self::doEncrypt($data, $publicKey, $options instanceof Sm2CipherOptions ? $options : null);
     }
 
     /**
@@ -326,7 +342,7 @@ class Sm2 implements SignerInterface, CipherInterface
      */
     public static function decrypt(string $data, string $privateKey, mixed $options = null): string
     {
-        return self::doDecrypt($data, $privateKey, $options);
+        return self::doDecrypt($data, $privateKey, $options instanceof Sm2CipherOptions ? $options : null);
     }
 
     /**
@@ -339,7 +355,7 @@ class Sm2 implements SignerInterface, CipherInterface
      */
     public static function sign(string $data, string $privateKey, mixed $options = null): string
     {
-        return self::doSignature($data, $privateKey, $options);
+        return self::doSignature($data, $privateKey, $options instanceof SignatureOptions ? $options : null);
     }
 
     /**
@@ -353,7 +369,7 @@ class Sm2 implements SignerInterface, CipherInterface
      */
     public static function verify(string $data, string $signature, string $publicKey, mixed $options = null): bool
     {
-        return self::doVerifySignature($data, $signature, $publicKey, $options);
+        return self::doVerifySignature($data, $signature, $publicKey, $options instanceof SignatureOptions ? $options : null);
     }
 
     /**
@@ -459,13 +475,13 @@ class Sm2 implements SignerInterface, CipherInterface
         $n = self::gmpParam('n');
         $x1Dec = gmp_init($x1Hex, 16);
         $sDec = gmp_init($sHex, 16);
-        if (gmp_cmp($x1Dec, 0) <= 0 || gmp_cmp($x1Dec, $n) >= 0 || gmp_cmp($sDec, 0) <= 0 || gmp_cmp($sDec, $n) >= 0) {
+        if (!self::constantTimeInSignatureRange($x1Dec, $n) || !self::constantTimeInSignatureRange($sDec, $n)) {
             return false;
         }
 
         $e = self::calcE($data, $hash, $publicKey, $userId);
         $t = gmp_mod(gmp_add($x1Dec, $sDec), $n);
-        if (gmp_cmp($t, 0) === 0) {
+        if (self::constantTimeIsZero($t)) {
             return false;
         }
 
@@ -519,6 +535,22 @@ class Sm2 implements SignerInterface, CipherInterface
         $gY = self::$eccTable['gY'];
 
         return sprintf('%04x', $len) . $userIdHex . $a . $b . $gX . $gY . $x . $y;
+    }
+
+    /**
+     * Compute ZA/ZB user identity digest for SM2 signature and key exchange.
+     *
+     * @internal For internal use by KeyExchange and tests. Not covered by backward compatibility.
+     */
+    public static function getUserIdDigest(string $userId, string $publicKey): string
+    {
+        if (!self::isOnCurve($publicKey)) {
+            throw new InvalidKeyException('Invalid public key: not on SM2 curve');
+        }
+
+        $x = substr($publicKey, 0, 64);
+        $y = substr($publicKey, 64);
+        return Sm3::sm3(Hex::fromHex(self::getUserIdHash($userId, $x, $y)));
     }
 
     private static function kdf(string $seed, int $keyLen): string
@@ -799,6 +831,38 @@ class Sm2 implements SignerInterface, CipherInterface
         $x3 = gmp_mod(gmp_sub(gmp_pow($lambda, 2), gmp_mul(self::$gmpTwo, $x)), $p);
         $y3 = gmp_mod(gmp_sub(gmp_mul($lambda, gmp_sub($x, $x3)), $y), $p);
         return ['x' => $x3, 'y' => $y3];
+    }
+
+    /**
+     * Constant-time check if a GMP value equals zero.
+     * Uses hash_equals on fixed-length hex strings to avoid GMP's variable-time limb comparison.
+     */
+    private static function constantTimeIsZero(\GMP $value): bool
+    {
+        $hex = str_pad(gmp_strval($value, 16), 64, '0', STR_PAD_LEFT);
+        return hash_equals($hex, str_repeat('0', 64));
+    }
+
+    /**
+     * Constant-time check if a GMP value is in the valid signature range (0 < value < n).
+     */
+    private static function constantTimeInSignatureRange(\GMP $value, \GMP $n): bool
+    {
+        $hex = str_pad(gmp_strval($value, 16), 64, '0', STR_PAD_LEFT);
+        $nHex = str_pad(gmp_strval($n, 16), 64, '0', STR_PAD_LEFT);
+
+        // Check not zero (constant-time using hash_equals)
+        $notZero = !hash_equals($hex, str_repeat('0', 64));
+        // Check strictly less than n (constant-time byte-by-byte)
+        $less = 0;
+        $equal = 1;
+        for ($i = 0; $i < 64; $i++) {
+            $vByte = ord($hex[$i]);
+            $nByte = ord($nHex[$i]);
+            $less |= (($vByte < $nByte) ? 1 : 0) & $equal;
+            $equal &= ($vByte === $nByte) ? 1 : 0;
+        }
+        return $notZero && $less !== 0;
     }
 
     private static function isAllZero(string $data): bool

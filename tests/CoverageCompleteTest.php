@@ -35,7 +35,7 @@ class CoverageCompleteTest extends TestCase
     {
         $kp = new Keypair('a' . str_repeat('0', 63), 'b' . str_repeat('0', 127));
         $str = $kp->__toString();
-        $this->assertStringStartsWith('a', $str);
+        $this->assertStringNotContainsString('a' . str_repeat('0', 63), $str);
         $this->assertStringContainsString('b', $str);
     }
 
@@ -45,7 +45,7 @@ class CoverageCompleteTest extends TestCase
         $json = $kp->jsonSerialize();
         $this->assertArrayHasKey('privateKey', $json);
         $this->assertArrayHasKey('publicKey', $json);
-        $this->assertEquals(64, strlen($json['privateKey']));
+        $this->assertEquals('***REDACTED***', $json['privateKey']);
         $this->assertEquals(128, strlen($json['publicKey']));
     }
 
@@ -55,7 +55,8 @@ class CoverageCompleteTest extends TestCase
         $encoded = json_encode($kp);
         $this->assertIsString($encoded);
         $decoded = json_decode($encoded, true);
-        $this->assertEquals($kp->getPrivateKey(), $decoded['privateKey']);
+        $this->assertIsArray($decoded);
+        $this->assertEquals('***REDACTED***', $decoded['privateKey']);
         $this->assertEquals($kp->getPublicKey(), $decoded['publicKey']);
     }
 
@@ -190,7 +191,9 @@ class CoverageCompleteTest extends TestCase
             $idA,
             $idB,
             $rkpA->getPublicKey(),
-            $rkpB->getPublicKey()
+            $rkpB->getPublicKey(),
+            $kpA->getPublicKey(),
+            $kpB->getPublicKey()
         );
 
         $s2 = KeyExchange::computeResponderConfirmation(
@@ -199,7 +202,9 @@ class CoverageCompleteTest extends TestCase
             $idA,
             $idB,
             $rkpA->getPublicKey(),
-            $rkpB->getPublicKey()
+            $rkpB->getPublicKey(),
+            $kpA->getPublicKey(),
+            $kpB->getPublicKey()
         );
 
         $this->assertNotEmpty($s1);

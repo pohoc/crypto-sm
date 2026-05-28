@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CryptoSm\SM2;
 
+use CryptoSm\Crypto\Asn1;
 use CryptoSm\Exception\InvalidKeyException;
 use CryptoSm\Utils\Hex;
 
@@ -323,12 +324,19 @@ class Pem
             throw new InvalidKeyException('Invalid DER: expected SEQUENCE');
         }
         $offset++;
-        [, $offset] = self::parseDerLength($der, $offset);
-        if (ord($der[$offset]) !== 0x02) {
+        [$seqLen, $offset] = self::parseDerLength($der, $offset);
+        $seqEnd = $offset + $seqLen;
+        if ($seqEnd !== strlen($der)) {
+            throw new InvalidKeyException('Invalid DER: trailing data after private key');
+        }
+        if ($offset >= $seqEnd || ord($der[$offset]) !== 0x02) {
             throw new InvalidKeyException('Invalid DER: expected version INTEGER');
         }
         $offset++;
         [$verLen, $offset] = self::parseDerLength($der, $offset);
+        if ($verLen !== 1 || $offset + $verLen > $seqEnd) {
+            throw new InvalidKeyException('Invalid DER: invalid version INTEGER');
+        }
         $version = ord($der[$offset]);
 
         if ($version === 1) {
@@ -361,19 +369,12 @@ class Pem
 
     /**
      * Encode DER length field.
+     *
+     * Delegates to Asn1::encodeLength() to avoid code duplication.
      */
     private static function encodeDerLength(int $len): string
     {
-        if ($len < 128) {
-            return chr($len & 0xFF);
-        }
-        $bytes = '';
-        $temp = $len;
-        do {
-            $bytes = chr($temp & 0xFF) . $bytes;
-            $temp >>= 8;
-        } while ($temp > 0);
-        return chr((0x80 | strlen($bytes)) & 0xFF) . $bytes;
+        return Asn1::encodeLength($len);
     }
 
     /**
@@ -450,17 +451,29 @@ class Pem
      */
     private static function parseDerLength(string $data, int $offset): array
     {
+        if ($offset >= strlen($data)) {
+            throw new InvalidKeyException('Invalid DER: unexpected end of length field');
+        }
         $byte = ord($data[$offset]);
         if ($byte < 128) {
             return [$byte, $offset + 1];
         }
         $numBytes = $byte & 0x7F;
+        if ($numBytes === 0) {
+            throw new InvalidKeyException('Invalid DER: indefinite length is not allowed');
+        }
         if ($numBytes > 4 || $offset + 1 + $numBytes > strlen($data)) {
             throw new InvalidKeyException('Invalid DER: length field too long');
+        }
+        if ($numBytes > 1 && ord($data[$offset + 1]) === 0x00) {
+            throw new InvalidKeyException('Invalid DER: non-minimal length encoding');
         }
         $len = 0;
         for ($i = 0; $i < $numBytes; $i++) {
             $len = ($len << 8) | ord($data[$offset + 1 + $i]);
+        }
+        if ($len < 128) {
+            throw new InvalidKeyException('Invalid DER: non-minimal length encoding');
         }
         return [$len, $offset + 1 + $numBytes];
     }
@@ -482,17 +495,37 @@ class Pem
         }
         $oidBytes = substr($data, $offset, $len);
         $offset += $len;
+        if ($oidBytes === '') {
+            throw new InvalidKeyException('Invalid DER: empty OID');
+        }
 
-        $components = [];
-        $components[] = (int) (ord($oidBytes[0]) / 40);
-        $components[] = ord($oidBytes[0]) % 40;
+        $subIdentifiers = [];
         $value = 0;
-        for ($i = 1; $i < strlen($oidBytes); $i++) {
-            $value = ($value << 7) | (ord($oidBytes[$i]) & 0x7F);
-            if (!(ord($oidBytes[$i]) & 0x80)) {
-                $components[] = $value;
+        for ($i = 0; $i < strlen($oidBytes); $i++) {
+            $byte = ord($oidBytes[$i]);
+            $value = ($value << 7) | ($byte & 0x7F);
+            if (($byte & 0x80) === 0) {
+                $subIdentifiers[] = $value;
                 $value = 0;
             }
+        }
+        if ((ord($oidBytes[strlen($oidBytes) - 1]) & 0x80) !== 0) {
+            throw new InvalidKeyException('Invalid DER: unterminated OID component');
+        }
+        if ($subIdentifiers === []) {
+            throw new InvalidKeyException('Invalid DER: empty OID');
+        }
+
+        $first = array_shift($subIdentifiers);
+        if ($first < 40) {
+            $components = [0, $first];
+        } elseif ($first < 80) {
+            $components = [1, $first - 40];
+        } else {
+            $components = [2, $first - 80];
+        }
+        foreach ($subIdentifiers as $component) {
+            $components[] = $component;
         }
 
         return [implode('.', $components), $offset];
@@ -511,13 +544,20 @@ class Pem
             throw new InvalidKeyException('Invalid SEC1 private key: expected SEQUENCE');
         }
         $offset++;
-        [, $offset] = self::parseDerLength($der, $offset);
+        [$seqLen, $offset] = self::parseDerLength($der, $offset);
+        $seqEnd = $offset + $seqLen;
+        if ($seqEnd !== strlen($der)) {
+            throw new InvalidKeyException('Invalid SEC1 private key: trailing data');
+        }
 
         if ($offset >= strlen($der) || ord($der[$offset]) !== 0x02) {
             throw new InvalidKeyException('Invalid SEC1 private key: expected version INTEGER');
         }
         $offset++;
         [$verLen, $offset] = self::parseDerLength($der, $offset);
+        if ($verLen !== 1 || $offset + $verLen > $seqEnd || ord($der[$offset]) !== 1) {
+            throw new InvalidKeyException('Invalid SEC1 private key: invalid version');
+        }
         $offset += $verLen;
 
         if ($offset >= strlen($der) || ord($der[$offset]) !== 0x04) {
@@ -525,43 +565,83 @@ class Pem
         }
         $offset++;
         [$keyLen, $offset] = self::parseDerLength($der, $offset);
-        if ($offset + $keyLen > strlen($der)) {
+        if ($offset + $keyLen > $seqEnd) {
             throw new InvalidKeyException('Invalid DER: unexpected end of data');
         }
         $privateKeyBin = substr($der, $offset, $keyLen);
         $offset += $keyLen;
+        if ($keyLen < 1 || $keyLen > 32) {
+            throw new InvalidKeyException('Invalid SEC1 private key length');
+        }
 
         $privateKey = str_pad(bin2hex($privateKeyBin), 64, '0', STR_PAD_LEFT);
+        Sm2::validatePrivateKey($privateKey);
 
         $publicKey = '';
-        if ($offset < strlen($der)) {
+        if ($offset < $seqEnd) {
+            $tag = ord($der[$offset]);
+            if ($tag === 0xA0) {
+                $offset++;
+                [$ctxLen, $offset] = self::parseDerLength($der, $offset);
+                $ctxEnd = $offset + $ctxLen;
+                if ($ctxEnd > $seqEnd) {
+                    throw new InvalidKeyException('Invalid DER: unexpected end of data');
+                }
+                [$curveOid, $offset] = self::decodeOid($der, $offset);
+                if ($curveOid !== self::OID_SM2) {
+                    throw new InvalidKeyException('Invalid SEC1 private key: expected SM2 curve OID, got ' . $curveOid);
+                }
+                if ($offset !== $ctxEnd) {
+                    throw new InvalidKeyException('Invalid SEC1 private key: invalid curve parameters');
+                }
+                $offset = $ctxEnd;
+            }
+        }
+        if ($offset < $seqEnd) {
             $tag = ord($der[$offset]);
             if ($tag === 0xA1) {
                 $offset++;
                 [$ctxLen, $offset] = self::parseDerLength($der, $offset);
+                $ctxEnd = $offset + $ctxLen;
+                if ($ctxEnd > $seqEnd) {
+                    throw new InvalidKeyException('Invalid DER: unexpected end of data');
+                }
                 if ($offset >= strlen($der) || ord($der[$offset]) !== 0x03) {
                     throw new InvalidKeyException('Invalid SEC1 private key: expected BIT STRING in [1]');
                 }
                 $offset++;
                 [$bsLen, $offset] = self::parseDerLength($der, $offset);
-                if ($offset >= strlen($der)) {
+                if ($bsLen < 1 || $offset >= $ctxEnd) {
                     throw new InvalidKeyException('Invalid DER: unexpected end of data');
                 }
                 $unusedBits = ord($der[$offset]);
+                if ($unusedBits !== 0) {
+                    throw new InvalidKeyException('Invalid SEC1 private key: public key BIT STRING has unused bits');
+                }
                 $offset++;
-                if ($offset + $bsLen - 1 > strlen($der)) {
+                if ($offset + $bsLen - 1 > $ctxEnd) {
                     throw new InvalidKeyException('Invalid DER: unexpected end of data');
                 }
-                $pointData = substr($der, $offset, $bsLen - 1);
-                if (strlen($pointData) === 65 && ord($pointData[0]) === 0x04) {
-                    $publicKey = bin2hex(substr($pointData, 1));
+                if ($offset + $bsLen - 1 !== $ctxEnd) {
+                    throw new InvalidKeyException('Invalid SEC1 private key: invalid public key parameters');
                 }
+                $pointData = substr($der, $offset, $bsLen - 1);
+                if (strlen($pointData) !== 65 || ord($pointData[0]) !== 0x04) {
+                    throw new InvalidKeyException('Invalid SEC1 private key: expected uncompressed public key');
+                }
+                $publicKey = bin2hex(substr($pointData, 1));
+                $offset = $ctxEnd;
             }
+        }
+
+        if ($offset !== $seqEnd) {
+            throw new InvalidKeyException('Invalid SEC1 private key: trailing data');
         }
 
         if ($publicKey === '') {
             $publicKey = Sm2::getPublicKey($privateKey);
         }
+        self::validateImportedKeyPair($privateKey, $publicKey);
 
         return ['privateKey' => $privateKey, 'publicKey' => $publicKey];
     }
@@ -579,13 +659,20 @@ class Pem
             throw new InvalidKeyException('Invalid PKCS8 private key: expected SEQUENCE');
         }
         $offset++;
-        [, $offset] = self::parseDerLength($der, $offset);
+        [$seqLen, $offset] = self::parseDerLength($der, $offset);
+        $seqEnd = $offset + $seqLen;
+        if ($seqEnd !== strlen($der)) {
+            throw new InvalidKeyException('Invalid PKCS8 private key: trailing data');
+        }
 
         if ($offset >= strlen($der) || ord($der[$offset]) !== 0x02) {
             throw new InvalidKeyException('Invalid PKCS8 private key: expected version INTEGER');
         }
         $offset++;
         [$verLen, $offset] = self::parseDerLength($der, $offset);
+        if ($verLen !== 1 || $offset + $verLen > $seqEnd || ord($der[$offset]) !== 0) {
+            throw new InvalidKeyException('Invalid PKCS8 private key: invalid version');
+        }
         $offset += $verLen;
 
         if ($offset >= strlen($der) || ord($der[$offset]) !== 0x30) {
@@ -593,24 +680,47 @@ class Pem
         }
         $offset++;
         [$algSeqLen, $offset] = self::parseDerLength($der, $offset);
-        $offset += $algSeqLen;
+        $algSeqEnd = $offset + $algSeqLen;
+        if ($algSeqEnd > $seqEnd) {
+            throw new InvalidKeyException('Invalid DER: unexpected end of data');
+        }
+        [$algOid, $offset] = self::decodeOid($der, $offset);
+        if ($algOid !== self::OID_EC_PUBLIC_KEY) {
+            throw new InvalidKeyException('Invalid PKCS8 private key: expected ecPublicKey algorithm, got ' . $algOid);
+        }
+        [$curveOid, $offset] = self::decodeOid($der, $offset);
+        if ($curveOid !== self::OID_SM2) {
+            throw new InvalidKeyException('Invalid PKCS8 private key: expected SM2 curve OID, got ' . $curveOid);
+        }
+        if ($offset !== $algSeqEnd) {
+            throw new InvalidKeyException('Invalid PKCS8 private key: invalid algorithm parameters');
+        }
+        $offset = $algSeqEnd;
 
         if ($offset >= strlen($der) || ord($der[$offset]) !== 0x04) {
             throw new InvalidKeyException('Invalid PKCS8 private key: expected OCTET STRING');
         }
         $offset++;
         [$octLen, $offset] = self::parseDerLength($der, $offset);
-        if ($offset + $octLen > strlen($der)) {
+        if ($offset + $octLen > $seqEnd) {
             throw new InvalidKeyException('Invalid DER: unexpected end of data');
         }
         $innerDer = substr($der, $offset, $octLen);
+        $offset += $octLen;
+        if ($offset !== $seqEnd) {
+            throw new InvalidKeyException('Invalid PKCS8 private key: trailing data');
+        }
 
         if (strlen($innerDer) > 0 && ord($innerDer[0]) === 0x30) {
             return self::parseSec1PrivateKeyInner($innerDer);
         }
 
         $privateKeyBin = $innerDer;
+        if (strlen($privateKeyBin) < 1 || strlen($privateKeyBin) > 32) {
+            throw new InvalidKeyException('Invalid PKCS8 private key length');
+        }
         $privateKey = str_pad(bin2hex($privateKeyBin), 64, '0', STR_PAD_LEFT);
+        Sm2::validatePrivateKey($privateKey);
         $publicKey = Sm2::getPublicKey($privateKey);
 
         return ['privateKey' => $privateKey, 'publicKey' => $publicKey];
@@ -633,12 +743,19 @@ class Pem
         }
         $offset++;
         [$seqLen, $offset] = self::parseDerLength($der, $offset);
+        $seqEnd = $offset + $seqLen;
+        if ($seqEnd !== strlen($der)) {
+            throw new InvalidKeyException('Invalid SEC1 inner: trailing data');
+        }
 
         if ($offset >= strlen($der) || ord($der[$offset]) !== 0x02) {
             throw new InvalidKeyException('Invalid SEC1 inner: expected version INTEGER');
         }
         $offset++;
         [$verLen, $offset] = self::parseDerLength($der, $offset);
+        if ($verLen !== 1 || $offset + $verLen > $seqEnd || ord($der[$offset]) !== 1) {
+            throw new InvalidKeyException('Invalid SEC1 inner: invalid version');
+        }
         $offset += $verLen;
 
         if ($offset >= strlen($der) || ord($der[$offset]) !== 0x04) {
@@ -646,45 +763,97 @@ class Pem
         }
         $offset++;
         [$keyLen, $offset] = self::parseDerLength($der, $offset);
-        if ($offset + $keyLen > strlen($der)) {
+        if ($offset + $keyLen > $seqEnd) {
             throw new InvalidKeyException('Invalid DER: unexpected end of data');
         }
         $privateKeyBin = substr($der, $offset, $keyLen);
+        if ($keyLen < 1 || $keyLen > 32) {
+            throw new InvalidKeyException('Invalid SEC1 inner private key length');
+        }
 
         $privateKey = str_pad(bin2hex($privateKeyBin), 64, '0', STR_PAD_LEFT);
+        Sm2::validatePrivateKey($privateKey);
 
         $publicKey = '';
         $offset += $keyLen;
-        if ($offset < strlen($der)) {
+        if ($offset < $seqEnd) {
+            $tag = ord($der[$offset]);
+            if ($tag === 0xA0) {
+                $offset++;
+                [$ctxLen, $offset] = self::parseDerLength($der, $offset);
+                $ctxEnd = $offset + $ctxLen;
+                if ($ctxEnd > $seqEnd) {
+                    throw new InvalidKeyException('Invalid DER: unexpected end of data');
+                }
+                [$curveOid, $offset] = self::decodeOid($der, $offset);
+                if ($curveOid !== self::OID_SM2) {
+                    throw new InvalidKeyException('Invalid SEC1 inner: expected SM2 curve OID, got ' . $curveOid);
+                }
+                if ($offset !== $ctxEnd) {
+                    throw new InvalidKeyException('Invalid SEC1 inner: invalid curve parameters');
+                }
+                $offset = $ctxEnd;
+            }
+        }
+        if ($offset < $seqEnd) {
             $tag = ord($der[$offset]);
             if ($tag === 0xA1) {
                 $offset++;
                 [$ctxLen, $offset] = self::parseDerLength($der, $offset);
+                $ctxEnd = $offset + $ctxLen;
+                if ($ctxEnd > $seqEnd) {
+                    throw new InvalidKeyException('Invalid DER: unexpected end of data');
+                }
                 if ($offset >= strlen($der) || ord($der[$offset]) !== 0x03) {
                     throw new InvalidKeyException('Invalid SEC1 inner: expected BIT STRING in [1]');
                 }
                 $offset++;
                 [$bsLen, $offset] = self::parseDerLength($der, $offset);
-                if ($offset >= strlen($der)) {
+                if ($bsLen < 1 || $offset >= $ctxEnd) {
                     throw new InvalidKeyException('Invalid DER: unexpected end of data');
                 }
                 $unusedBits = ord($der[$offset]);
+                if ($unusedBits !== 0) {
+                    throw new InvalidKeyException('Invalid SEC1 inner: public key BIT STRING has unused bits');
+                }
                 $offset++;
-                if ($offset + $bsLen - 1 > strlen($der)) {
+                if ($offset + $bsLen - 1 > $ctxEnd) {
                     throw new InvalidKeyException('Invalid DER: unexpected end of data');
                 }
-                $pointData = substr($der, $offset, $bsLen - 1);
-                if (strlen($pointData) === 65 && ord($pointData[0]) === 0x04) {
-                    $publicKey = bin2hex(substr($pointData, 1));
+                if ($offset + $bsLen - 1 !== $ctxEnd) {
+                    throw new InvalidKeyException('Invalid SEC1 inner: invalid public key parameters');
                 }
+                $pointData = substr($der, $offset, $bsLen - 1);
+                if (strlen($pointData) !== 65 || ord($pointData[0]) !== 0x04) {
+                    throw new InvalidKeyException('Invalid SEC1 inner: expected uncompressed public key');
+                }
+                $publicKey = bin2hex(substr($pointData, 1));
+                $offset = $ctxEnd;
             }
+        }
+
+        if ($offset !== $seqEnd) {
+            throw new InvalidKeyException('Invalid SEC1 inner: trailing data');
         }
 
         if ($publicKey === '') {
             $publicKey = Sm2::getPublicKey($privateKey);
         }
+        self::validateImportedKeyPair($privateKey, $publicKey);
 
         return ['privateKey' => $privateKey, 'publicKey' => $publicKey];
+    }
+
+    private static function validateImportedKeyPair(string $privateKey, string $publicKey): void
+    {
+        Sm2::validatePrivateKey($privateKey);
+        if (!Sm2::isOnCurve($publicKey)) {
+            throw new InvalidKeyException('Invalid imported public key: not on SM2 curve');
+        }
+        $derived = Sm2::getPublicKey($privateKey);
+        if (!hash_equals(strtolower($derived), strtolower($publicKey))) {
+            throw new InvalidKeyException('Invalid imported key pair: public key does not match private key');
+        }
     }
 
     /**
@@ -698,7 +867,11 @@ class Pem
             throw new InvalidKeyException('Invalid public key: expected SEQUENCE');
         }
         $offset++;
-        [, $offset] = self::parseDerLength($der, $offset);
+        [$seqLen, $offset] = self::parseDerLength($der, $offset);
+        $seqEnd = $offset + $seqLen;
+        if ($seqEnd !== strlen($der)) {
+            throw new InvalidKeyException('Invalid public key: trailing data');
+        }
 
         if ($offset >= strlen($der) || ord($der[$offset]) !== 0x30) {
             throw new InvalidKeyException('Invalid public key: expected algorithm SEQUENCE');
@@ -706,6 +879,9 @@ class Pem
         $offset++;
         [$algSeqLen, $offset] = self::parseDerLength($der, $offset);
         $algSeqEnd = $offset + $algSeqLen;
+        if ($algSeqEnd > $seqEnd) {
+            throw new InvalidKeyException('Invalid DER: unexpected end of data');
+        }
 
         [$algOid, $offset] = self::decodeOid($der, $offset);
         if ($algOid !== self::OID_EC_PUBLIC_KEY) {
@@ -715,6 +891,9 @@ class Pem
         if ($curveOid !== self::OID_SM2) {
             throw new InvalidKeyException('Invalid public key: expected SM2 curve OID, got ' . $curveOid);
         }
+        if ($offset !== $algSeqEnd) {
+            throw new InvalidKeyException('Invalid public key: invalid algorithm parameters');
+        }
 
         $offset = $algSeqEnd;
 
@@ -723,20 +902,32 @@ class Pem
         }
         $offset++;
         [$bsLen, $offset] = self::parseDerLength($der, $offset);
-        if ($offset >= strlen($der)) {
+        if ($bsLen < 1 || $offset >= $seqEnd) {
             throw new InvalidKeyException('Invalid DER: unexpected end of data');
         }
         $unusedBits = ord($der[$offset]);
+        if ($unusedBits !== 0) {
+            throw new InvalidKeyException('Invalid public key: BIT STRING has unused bits');
+        }
         $offset++;
-        if ($offset + $bsLen - 1 > strlen($der)) {
+        if ($offset + $bsLen - 1 > $seqEnd) {
             throw new InvalidKeyException('Invalid DER: unexpected end of data');
         }
         $pointData = substr($der, $offset, $bsLen - 1);
+        $offset += $bsLen - 1;
 
         if (strlen($pointData) !== 65 || ord($pointData[0]) !== 0x04) {
             throw new InvalidKeyException('Invalid public key: expected uncompressed point (04 || x || y)');
         }
 
-        return bin2hex(substr($pointData, 1));
+        $publicKey = bin2hex(substr($pointData, 1));
+        if (!Sm2::isOnCurve($publicKey)) {
+            throw new InvalidKeyException('Invalid public key: not on SM2 curve');
+        }
+        if ($offset !== $seqEnd) {
+            throw new InvalidKeyException('Invalid public key: trailing data');
+        }
+
+        return $publicKey;
     }
 }

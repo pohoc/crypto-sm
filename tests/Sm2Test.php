@@ -575,7 +575,9 @@ class Sm2Test extends TestCase
         for ($i = 0; $i < 5; $i++) {
             $k = bin2hex(random_bytes(32));
             $result = $pointMultiply->invoke(null, '', $k);
-            $this->assertNotNull($result, 'pointMultiply should not return null for random k');
+            if (!is_string($result)) {
+                $this->fail('pointMultiply should return a string for random k');
+            }
             $this->assertEquals(128, strlen($result), 'Result should be 128 hex chars');
 
             // 用 SM2 签名验签间接验证 k*G 的正确性
