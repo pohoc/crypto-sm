@@ -364,4 +364,24 @@ class SmCrypto
         return Sm4::decrypt($data, $key, $options);
     }
 
+    /**
+     * Encrypt data into a structured SM4 payload carrying IV/tag metadata.
+     *
+     * @return array{version: int, algorithm: string, mode: string, ciphertext: string, padding?: string, iv?: string, aad?: string, tagLength?: int, tag?: string}
+     */
+    public static function sm4EncryptPayload(string $data, string $key, ?Sm4Options $options = null): array
+    {
+        return Sm4::encryptPayload($data, $key, $options);
+    }
+
+    /**
+     * Decrypt a structured SM4 payload produced by sm4EncryptPayload().
+     *
+     * @param array<string, mixed> $payload
+     */
+    public static function sm4DecryptPayload(array $payload, string $key): string
+    {
+        return Sm4::decryptPayload($payload, $key);
+    }
+
 }

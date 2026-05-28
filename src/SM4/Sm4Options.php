@@ -52,6 +52,9 @@ class Sm4Options
         if (!in_array($padding, $valid, true)) {
             throw new InvalidKeyException('Padding must be one of: ' . implode(', ', $valid));
         }
+        if ($padding === 'zero') {
+            @trigger_error('SM4 zero padding is ambiguous for plaintext ending in null bytes. Use pkcs5/pkcs7 or an authenticated mode such as GCM instead.', E_USER_DEPRECATED);
+        }
         $this->padding = $padding;
         return $this;
     }

@@ -215,10 +215,8 @@ class SmCryptoTest extends TestCase
     {
         $key = '0123456789abcdeffedcba9876543210';
         $msg = 'null sm4 options';
-        // null options 默认 CBC + 自动生成 IV，需要共享同一个 options 实例
-        $options = new Sm4Options(); // IV 懒加载，同一实例共享同一 IV
-        $ct = SmCrypto::sm4Encrypt($msg, $key, $options);
-        $pt = SmCrypto::sm4Decrypt($ct, $key, $options);
+        $ct = SmCrypto::sm4Encrypt($msg, $key, null);
+        $pt = SmCrypto::sm4Decrypt($ct, $key, null);
         $this->assertEquals($msg, $pt);
     }
 
@@ -277,6 +275,15 @@ class SmCryptoTest extends TestCase
         $ct = SmCrypto::sm4Encrypt($msg, $key, $opts);
         $pt = SmCrypto::sm4Decrypt($ct, $key, $opts);
         $this->assertEquals($msg, $pt);
+    }
+
+    public function testSm4PayloadViaFacade(): void
+    {
+        $key = '0123456789abcdeffedcba9876543210';
+        $msg = 'payload via facade';
+        $payload = SmCrypto::sm4EncryptPayload($msg, $key, (new Sm4Options())->setMode('gcm')->setAad('facade aad'));
+
+        $this->assertEquals($msg, SmCrypto::sm4DecryptPayload($payload, $key));
     }
 
     // ========================================================================

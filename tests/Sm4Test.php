@@ -323,6 +323,22 @@ class Sm4Test extends TestCase
         $this->assertEquals($msg, $decrypted);
     }
 
+    public function testSm4NullOptionsUsesSelfContainedIv(): void
+    {
+        $msg = 'default options should carry IV';
+        $encrypted = Sm4::encrypt($msg, $this->key);
+
+        $this->assertTrue(ctype_xdigit($encrypted));
+        $this->assertGreaterThan(64, strlen($encrypted));
+        $this->assertEquals($msg, Sm4::decrypt($encrypted, $this->key));
+    }
+
+    public function testSm4NullOptionsRejectsCiphertextWithoutEmbeddedIv(): void
+    {
+        $this->expectException(InvalidKeyException::class);
+        Sm4::decrypt(str_repeat('a', 32), $this->key);
+    }
+
     // ========================================================================
     // 错误解密密钥
     // ========================================================================
@@ -479,5 +495,99 @@ class Sm4Test extends TestCase
             // 填充验证失败（统一错误消息）→ 符合预期
             $this->assertStringContainsString('Decryption failed', $e->getMessage());
         }
+    }
+
+    public function testSm4GcmEmptyPlaintextThroughHighLevelApi(): void
+    {
+        $opts = (new Sm4Options())
+            ->setMode(Sm4::MODE_GCM)
+            ->setIv(str_repeat('01', 12));
+
+        $encrypted = Sm4::encrypt('', $this->key, $opts);
+
+        $this->assertEquals($opts->getTagLength() * 2, strlen($encrypted));
+        $this->assertEquals('', Sm4::decrypt($encrypted, $this->key, $opts));
+    }
+
+    public function testSm4StreamModesAcceptEmptyCiphertext(): void
+    {
+        foreach ([Sm4::MODE_CFB, Sm4::MODE_OFB, Sm4::MODE_CTR] as $mode) {
+            $opts = (new Sm4Options())->setMode($mode)->setIv($this->iv);
+            $encrypted = Sm4::encrypt('', $this->key, $opts);
+
+            $this->assertSame('', $encrypted);
+            $this->assertSame('', Sm4::decrypt($encrypted, $this->key, $opts));
+        }
+    }
+
+    public function testSm4PayloadRoundTripForCbc(): void
+    {
+        $payload = Sm4::encryptPayload('payload cbc', $this->key, (new Sm4Options())->setMode(Sm4::MODE_CBC));
+
+        $this->assertSame(1, $payload['version']);
+        $this->assertSame('SM4', $payload['algorithm']);
+        $this->assertSame(Sm4::MODE_CBC, $payload['mode']);
+        $this->assertArrayHasKey('iv', $payload);
+        $this->assertArrayHasKey('padding', $payload);
+        $this->assertEquals('payload cbc', Sm4::decryptPayload($payload, $this->key));
+    }
+
+    public function testSm4PayloadRoundTripForGcm(): void
+    {
+        $opts = (new Sm4Options())
+            ->setMode(Sm4::MODE_GCM)
+            ->setAad('payload aad')
+            ->setTagLength(12);
+
+        $payload = Sm4::encryptPayload('payload gcm', $this->key, $opts);
+
+        $this->assertSame(Sm4::MODE_GCM, $payload['mode']);
+        $iv = $payload['iv'] ?? null;
+        $aad = $payload['aad'] ?? null;
+        $tagLength = $payload['tagLength'] ?? null;
+        $tag = $payload['tag'] ?? null;
+        if (!is_string($iv) || !is_string($aad) || !is_int($tagLength) || !is_string($tag)) {
+            $this->fail('GCM payload should include string iv/aad/tag and integer tagLength');
+        }
+        $this->assertSame(bin2hex('payload aad'), $aad);
+        $this->assertSame(12, $tagLength);
+        $this->assertSame(24, strlen($tag));
+        $this->assertEquals('payload gcm', Sm4::decryptPayload($payload, $this->key));
+    }
+
+    public function testSm4PayloadGeneratesFreshIvWhenOptionsReused(): void
+    {
+        $opts = (new Sm4Options())->setMode(Sm4::MODE_GCM);
+
+        $payload1 = Sm4::encryptPayload('same data', $this->key, $opts);
+        $payload2 = Sm4::encryptPayload('same data', $this->key, $opts);
+
+        $iv1 = $payload1['iv'] ?? null;
+        $iv2 = $payload2['iv'] ?? null;
+        if (!is_string($iv1) || !is_string($iv2)) {
+            $this->fail('Payload should include IV values');
+        }
+        $this->assertNotSame($iv1, $iv2);
+        $this->assertEquals('same data', Sm4::decryptPayload($payload1, $this->key));
+        $this->assertEquals('same data', Sm4::decryptPayload($payload2, $this->key));
+    }
+
+    public function testSm4PayloadRejectsZeroPadding(): void
+    {
+        $this->expectException(InvalidKeyException::class);
+        Sm4::encryptPayload('legacy padding', $this->key, (new Sm4Options())->setPadding('zero'));
+    }
+
+    public function testSm4PayloadRejectsTamperedGcmAad(): void
+    {
+        $payload = Sm4::encryptPayload(
+            'authenticated payload',
+            $this->key,
+            (new Sm4Options())->setMode(Sm4::MODE_GCM)->setAad('aad')
+        );
+        $payload['aad'] = bin2hex('changed aad');
+
+        $this->expectException(CryptoException::class);
+        Sm4::decryptPayload($payload, $this->key);
     }
 }
