@@ -55,19 +55,18 @@ class Sm3 implements HashInterface
         return self::sm3($data);
     }
 
-    /** @var bool|null Cached availability of OpenSSL SM3 support */
-    private static ?bool $openSslSm3Available = null;
+    /** @var bool|null Cached availability of native SM3 support */
+    private static ?bool $nativeSm3Available = null;
 
     // ─── Streaming API ────────────────────────────────────────────────────
 
-    /** @var bool Whether OpenSSL SM3 is available (cached per instance) */
-    private bool $openSslAvailable;
+    /** @var bool Whether native SM3 streaming is available (cached per instance) */
+    private bool $nativeAvailable;
 
     /** @var string Buffered data for streaming (concatenated, processed on finalize) */
     private string $buffer = '';
 
-    /** @var string All data ever fed (for OpenSSL one-shot hashing in finalize) */
-    private string $allData = '';
+    private ?\HashContext $hashContext = null;
 
     /** @var int Total number of bytes processed */
     private int $totalLen = 0;
@@ -78,11 +77,14 @@ class Sm3 implements HashInterface
     public function __construct()
     {
         $this->state = self::IV;
-        if (self::$openSslSm3Available === null) {
-            self::$openSslSm3Available = function_exists('openssl_digest')
-                && in_array('sm3', openssl_get_md_methods(), true);
+        if (self::$nativeSm3Available === null) {
+            self::$nativeSm3Available = function_exists('hash_init')
+                && in_array('sm3', hash_algos(), true);
         }
-        $this->openSslAvailable = self::$openSslSm3Available;
+        $this->nativeAvailable = self::$nativeSm3Available;
+        if ($this->nativeAvailable) {
+            $this->hashContext = hash_init('sm3');
+        }
     }
 
     /**
@@ -93,10 +95,13 @@ class Sm3 implements HashInterface
      */
     public function update(string $data): self
     {
-        $this->allData .= $data;
-        $this->totalLen += strlen($data);
+        $dataLen = strlen($data);
+        $this->totalLen += $dataLen;
 
-        if (!$this->openSslAvailable) {
+        if ($this->nativeAvailable && $this->hashContext !== null) {
+            hash_update($this->hashContext, $data);
+        } else {
+            // Pure PHP path: process blocks incrementally, no allData overhead
             $this->buffer .= $data;
             while (strlen($this->buffer) >= 64) {
                 $block = substr($this->buffer, 0, 64);
@@ -111,19 +116,17 @@ class Sm3 implements HashInterface
     /**
      * Finalize the streaming hash and return the result.
      *
-     * When OpenSSL SM3 is available, the entire buffered data is hashed in one
-     * call — massively faster than pure PHP (typically 100-300x speedup).
+     * When native SM3 is available, data is processed through PHP's hash
+     * extension incrementally to avoid retaining full streams in memory.
      *
      * @return string 64-character hex string (256-bit hash)
      */
     public function finalize(): string
     {
-        if ($this->openSslAvailable) {
-            $result = openssl_digest($this->allData, 'sm3');
-            if ($result !== false) {
-                $this->reset();
-                return $result;
-            }
+        if ($this->nativeAvailable && $this->hashContext !== null) {
+            $result = hash_final($this->hashContext);
+            $this->reset();
+            return $result;
         }
 
         $result = $this->finalizePure();
@@ -134,9 +137,9 @@ class Sm3 implements HashInterface
     private function reset(): void
     {
         $this->buffer = '';
-        $this->allData = '';
         $this->totalLen = 0;
         $this->state = self::IV;
+        $this->hashContext = $this->nativeAvailable ? hash_init('sm3') : null;
     }
 
     /**
@@ -235,16 +238,13 @@ class Sm3 implements HashInterface
 
     private static function computeHash(string $msg): string
     {
-        // P0: 优先使用 OpenSSL 原生 SM3（OpenSSL 1.1.1+ 支持，C 实现比纯 PHP 快 100-300 倍）
-        if (self::$openSslSm3Available === null) {
-            self::$openSslSm3Available = function_exists('openssl_digest')
-                && in_array('sm3', openssl_get_md_methods(), true);
+        // P0: Prefer PHP's native hash extension when SM3 is available.
+        if (self::$nativeSm3Available === null) {
+            self::$nativeSm3Available = function_exists('hash')
+                && in_array('sm3', hash_algos(), true);
         }
-        if (self::$openSslSm3Available) {
-            $result = openssl_digest($msg, 'sm3');
-            if ($result !== false) {
-                return $result;
-            }
+        if (self::$nativeSm3Available) {
+            return hash('sm3', $msg);
         }
 
         return self::computeHashPure($msg);
