@@ -35,10 +35,10 @@
     "phpunit/phpunit": "^9.5|^10.0|^11.0"
   },
   "scripts": {
-    "test": "phpunit",
-    "analyse": "phpstan analyse",
-    "cs-check": "php-cs-fixer fix --dry-run --diff",
-    "cs-fix": "php-cs-fixer fix",
+    "test": "vendor/bin/phpunit",
+    "analyse": "vendor/bin/phpstan analyse",
+    "cs-check": "vendor/bin/php-cs-fixer fix --dry-run --diff",
+    "cs-fix": "vendor/bin/php-cs-fixer fix",
     "changelog": "php scripts/changelog.php",
     "check": [
       "@cs-check",
