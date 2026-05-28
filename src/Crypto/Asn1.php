@@ -33,31 +33,28 @@ class Asn1
         }
         $offset++;
 
-        if (!isset($data[$offset])) {
-            throw new CryptoException('Unexpected end of ASN.1 data');
-        }
-        $len = ord($data[$offset++]);
-        if ($len > 128) {
-            $lenBytes = $len & 0x7F;
-            if ($lenBytes > 4 || $offset + $lenBytes > strlen($data)) {
-                throw new CryptoException('ASN.1 length bytes exceed available data');
-            }
-            $len = 0;
-            for ($i = 0; $i < $lenBytes; $i++) {
-                $len = ($len << 8) | ord($data[$offset++]);
-            }
-        }
+        $len = self::decodeLength($data, $offset);
 
         if ($offset + $len > strlen($data)) {
             throw new CryptoException('ASN.1 length exceeds available data');
         }
 
-        $value = '';
-        for ($i = 0; $i < $len; $i++) {
-            $value .= sprintf('%02x', ord($data[$offset++]));
+        if ($len === 0) {
+            throw new CryptoException('Invalid DER INTEGER: empty value');
         }
 
-        $value = ltrim($value, '0');
+        $valueBytes = substr($data, $offset, $len);
+        $offset += $len;
+
+        $first = ord($valueBytes[0]);
+        if (($first & 0x80) !== 0) {
+            throw new CryptoException('Invalid DER INTEGER: negative values are not supported');
+        }
+        if ($len > 1 && $first === 0x00 && (ord($valueBytes[1]) & 0x80) === 0) {
+            throw new CryptoException('Invalid DER INTEGER: non-minimal encoding');
+        }
+
+        $value = ltrim(bin2hex($valueBytes), '0');
         if ($value === '') {
             $value = '0';
         }
@@ -83,26 +80,49 @@ class Asn1
         }
         $offset++;
 
-        if (!isset($data[$offset])) {
-            throw new CryptoException('Unexpected end of ASN.1 data');
-        }
-        $seqLen = ord($data[$offset++]);
-        if ($seqLen > 128) {
-            $lenBytes = $seqLen & 0x7F;
-            if ($lenBytes > 4 || $offset + $lenBytes > strlen($data)) {
-                throw new CryptoException('ASN.1 length bytes exceed available data');
-            }
-            $seqLen = 0;
-            for ($i = 0; $i < $lenBytes; $i++) {
-                $seqLen = ($seqLen << 8) | ord($data[$offset++]);
-            }
-        }
+        $seqLen = self::decodeLength($data, $offset);
 
         if ($offset + $seqLen > strlen($data)) {
             throw new CryptoException('ASN.1 length exceeds available data');
         }
 
         return $seqLen;
+    }
+
+    /**
+     * Decode a DER length field and advance the offset.
+     */
+    private static function decodeLength(string $data, int &$offset): int
+    {
+        if (!isset($data[$offset])) {
+            throw new CryptoException('Unexpected end of ASN.1 data');
+        }
+
+        $len = ord($data[$offset++]);
+        if (($len & 0x80) === 0) {
+            return $len;
+        }
+
+        $lenBytes = $len & 0x7F;
+        if ($lenBytes === 0) {
+            throw new CryptoException('ASN.1 indefinite lengths are not valid DER');
+        }
+        if ($lenBytes > 4 || $offset + $lenBytes > strlen($data)) {
+            throw new CryptoException('ASN.1 length bytes exceed available data');
+        }
+        if ($lenBytes > 1 && ord($data[$offset]) === 0x00) {
+            throw new CryptoException('ASN.1 length is not minimally encoded');
+        }
+
+        $decoded = 0;
+        for ($i = 0; $i < $lenBytes; $i++) {
+            $decoded = ($decoded << 8) | ord($data[$offset++]);
+        }
+        if ($decoded < 128) {
+            throw new CryptoException('ASN.1 length is not minimally encoded');
+        }
+
+        return $decoded;
     }
 
     /**
@@ -114,7 +134,7 @@ class Asn1
      * @param  int    $len Length value to encode
      * @return string DER-encoded length bytes
      */
-    private static function encodeLength(int $len): string
+    public static function encodeLength(int $len): string
     {
         if ($len < 128) {
             return chr($len & 0xFF);

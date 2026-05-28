@@ -7,6 +7,7 @@ namespace CryptoSm\Tests;
 use CryptoSm\Crypto\Asn1;
 use CryptoSm\Exception\CryptoException;
 use CryptoSm\Exception\InvalidKeyException;
+use CryptoSm\SM2\Pem;
 use CryptoSm\SM2\SignatureOptions;
 use CryptoSm\SM2\Sm2;
 use CryptoSm\SM2\Sm2CipherOptions;
@@ -147,6 +148,9 @@ class SecurityFixTest extends TestCase
 
         // 正常 KDF 应工作
         $result = $method->invoke(null, 'deadbeef', 32);
+        if (!is_string($result)) {
+            $this->fail('KDF should return a string');
+        }
         $this->assertEquals(32, strlen($result));
 
         // 验证溢出保护逻辑存在（通过检查源码中的常量）
@@ -253,6 +257,33 @@ class SecurityFixTest extends TestCase
         Asn1::decodeInteger($der, $offset);
     }
 
+    public function testDecodeIntegerRejectsEmptyValue(): void
+    {
+        $der = chr(0x02) . chr(0x00);
+        $offset = 0;
+        $this->expectException(CryptoException::class);
+        $this->expectExceptionMessage('Invalid DER INTEGER: empty value');
+        Asn1::decodeInteger($der, $offset);
+    }
+
+    public function testDecodeIntegerRejectsNegativeValue(): void
+    {
+        $der = chr(0x02) . chr(0x01) . chr(0x80);
+        $offset = 0;
+        $this->expectException(CryptoException::class);
+        $this->expectExceptionMessage('Invalid DER INTEGER: negative values are not supported');
+        Asn1::decodeInteger($der, $offset);
+    }
+
+    public function testDecodeIntegerRejectsNonMinimalValue(): void
+    {
+        $der = chr(0x02) . chr(0x02) . chr(0x00) . chr(0x01);
+        $offset = 0;
+        $this->expectException(CryptoException::class);
+        $this->expectExceptionMessage('Invalid DER INTEGER: non-minimal encoding');
+        Asn1::decodeInteger($der, $offset);
+    }
+
     // ========================================================================
     // ASN.1 decodeSequence 长度溢出保护
     // ========================================================================
@@ -272,6 +303,15 @@ class SecurityFixTest extends TestCase
         $offset = 0;
         $this->expectException(CryptoException::class);
         $this->expectExceptionMessage('ASN.1 length bytes exceed available data');
+        Asn1::decodeSequence($der, $offset);
+    }
+
+    public function testDecodeSequenceRejectsIndefiniteLength(): void
+    {
+        $der = chr(0x30) . chr(0x80) . chr(0x00) . chr(0x00);
+        $offset = 0;
+        $this->expectException(CryptoException::class);
+        $this->expectExceptionMessage('ASN.1 indefinite lengths are not valid DER');
         Asn1::decodeSequence($der, $offset);
     }
 
@@ -300,6 +340,24 @@ class SecurityFixTest extends TestCase
         $truncated = substr($der, 0, strlen($der) - 4);
         $this->expectException(CryptoException::class);
         Asn1::decodeDerSignature($truncated);
+    }
+
+    public function testPemDerRejectsIndefiniteLength(): void
+    {
+        $der = chr(0x30) . chr(0x80) . str_repeat(chr(0x00), 8);
+
+        $this->expectException(InvalidKeyException::class);
+        $this->expectExceptionMessage('Invalid DER: indefinite length is not allowed');
+        Pem::importPrivateKeyFromDer($der);
+    }
+
+    public function testPemDerRejectsNonMinimalLength(): void
+    {
+        $der = chr(0x30) . chr(0x81) . chr(0x09) . str_repeat(chr(0x00), 9);
+
+        $this->expectException(InvalidKeyException::class);
+        $this->expectExceptionMessage('Invalid DER: non-minimal length encoding');
+        Pem::importPrivateKeyFromDer($der);
     }
 
     // ========================================================================

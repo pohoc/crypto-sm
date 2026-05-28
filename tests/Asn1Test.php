@@ -174,8 +174,8 @@ class Asn1Test extends TestCase
     public function testDecodeIntegerMultiByteLength(): void
     {
         // 构造带多字节长度的 DER INTEGER
-        // 0x02 0x81 0x80 [128 bytes of 0xAB]
-        $der = chr(0x02) . chr(0x81) . chr(0x80) . str_repeat(chr(0xAB), 128);
+        // 0x02 0x81 0x80 [128 positive bytes]
+        $der = chr(0x02) . chr(0x81) . chr(0x80) . str_repeat(chr(0x2B), 128);
         $offset = 0;
         $result = Asn1::decodeInteger($der, $offset);
         $this->assertNotEmpty($result);
@@ -184,9 +184,9 @@ class Asn1Test extends TestCase
 
     public function testDecodeSequenceMultiByteLength(): void
     {
-        // 0x30 0x81 0x04 [4 bytes of content]
-        $content = "\x02\x01\x01\x02\x01\x02";
-        $der = chr(0x30) . chr(0x81) . chr(strlen($content)) . $content;
+        // 0x30 0x81 0x80 [128 bytes of content]
+        $content = str_repeat("\x00", 128);
+        $der = chr(0x30) . chr(0x81) . chr(0x80) . $content;
         $offset = 0;
         $seqLen = Asn1::decodeSequence($der, $offset);
         $this->assertEquals(strlen($content), $seqLen);
@@ -341,12 +341,12 @@ class Asn1Test extends TestCase
 
     public function testDecodeSequenceTwoByteLength(): void
     {
-        // 0x30 0x82 0x00 0x0A [10 bytes of content]
-        $content = str_repeat("\x00", 10);
-        $der = chr(0x30) . chr(0x82) . chr(0x00) . chr(0x0A) . $content;
+        // 0x30 0x82 0x01 0x00 [256 bytes of content]
+        $content = str_repeat("\x00", 256);
+        $der = chr(0x30) . chr(0x82) . chr(0x01) . chr(0x00) . $content;
         $offset = 0;
         $seqLen = Asn1::decodeSequence($der, $offset);
-        $this->assertEquals(10, $seqLen);
+        $this->assertEquals(256, $seqLen);
     }
 
     // ========================================================================
