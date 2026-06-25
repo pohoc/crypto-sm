@@ -527,6 +527,9 @@ class Sm2 implements SignerInterface, CipherInterface
     private static function getUserIdHash(string $userId, string $x, string $y): string
     {
         $len = strlen($userId) * 8;
+        if ($len > 0xFFFFFFFF) {
+            throw new CryptoException('SM2 user ID too long: bit length exceeds 32-bit limit');
+        }
         $userIdHex = Hex::toHexString($userId);
 
         $a = self::$eccTable['a'];
@@ -534,7 +537,12 @@ class Sm2 implements SignerInterface, CipherInterface
         $gX = self::$eccTable['gX'];
         $gY = self::$eccTable['gY'];
 
-        return sprintf('%04x', $len) . $userIdHex . $a . $b . $gX . $gY . $x . $y;
+        $lenHex = sprintf('%04x', $len & 0xFFFF);
+        if ($len > 0xFFFF) {
+            $lenHex = sprintf('%08x', $len);
+        }
+
+        return $lenHex . $userIdHex . $a . $b . $gX . $gY . $x . $y;
     }
 
     /**
@@ -851,9 +859,7 @@ class Sm2 implements SignerInterface, CipherInterface
         $hex = str_pad(gmp_strval($value, 16), 64, '0', STR_PAD_LEFT);
         $nHex = str_pad(gmp_strval($n, 16), 64, '0', STR_PAD_LEFT);
 
-        // Check not zero (constant-time using hash_equals)
         $notZero = !hash_equals($hex, str_repeat('0', 64));
-        // Check strictly less than n (constant-time byte-by-byte)
         $less = 0;
         $equal = 1;
         for ($i = 0; $i < 64; $i++) {
@@ -862,7 +868,9 @@ class Sm2 implements SignerInterface, CipherInterface
             $less |= (($vByte < $nByte) ? 1 : 0) & $equal;
             $equal &= ($vByte === $nByte) ? 1 : 0;
         }
-        return $notZero && $less !== 0;
+
+        $result = (int) $notZero & ($less !== 0 ? 1 : 0);
+        return $result !== 0;
     }
 
     private static function isAllZero(string $data): bool

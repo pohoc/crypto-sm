@@ -489,6 +489,9 @@ class Sm4 implements CipherInterface
     /** @var array<string, Gcm> Cached GCM instances keyed by hex key */
     private static array $gcmCache = [];
 
+    /** @var array<string, array<string, true>>|null Tracks used (key, IV) pairs to prevent IV reuse in GCM (null=disabled) */
+    private static ?array $gcmUsedIvs = null;
+
     public static function warmupGcm(string $key): void
     {
         self::validateHexKey($key);
@@ -503,6 +506,26 @@ class Sm4 implements CipherInterface
             self::$gcmCache[$key] = Gcm::fromKey($keyBin);
         }
         self::$gcmCache[$key]->warmup();
+    }
+
+    /**
+     * Enable or disable GCM IV reuse tracking.
+     * Tracking is disabled by default to maintain backward compatibility with existing tests.
+     * Enable it in production to detect catastrophic IV reuse bugs early.
+     */
+    public static function enableGcmIvTracking(bool $enabled = true): void
+    {
+        self::$gcmUsedIvs = $enabled ? [] : null;
+    }
+
+    /**
+     * Reset GCM IV tracking for all keys.
+     */
+    public static function resetGcmIvTracking(): void
+    {
+        if (self::$gcmUsedIvs !== null) {
+            self::$gcmUsedIvs = [];
+        }
     }
 
     private static function cryptGcm(string $data, string $key, bool $encrypt, Sm4Options $options): string
@@ -520,6 +543,14 @@ class Sm4 implements CipherInterface
         $keyBin = hex2bin($key);
         if ($keyBin === false) {
             throw new InvalidKeyException('Invalid key hex');
+        }
+
+        if ($encrypt && self::$gcmUsedIvs !== null) {
+            self::$gcmUsedIvs[$key] ??= [];
+            if (isset(self::$gcmUsedIvs[$key][$iv])) {
+                throw new CryptoException('GCM IV reuse detected: same IV used twice with the same key is catastrophic');
+            }
+            self::$gcmUsedIvs[$key][$iv] = true;
         }
 
         if (!isset(self::$gcmCache[$key])) {
@@ -635,7 +666,7 @@ class Sm4 implements CipherInterface
         return match ($padding) {
             'pkcs5', 'pkcs7' => $data . str_repeat(chr($padLen), $padLen),
             'zero' => $data . str_repeat("\0", $padLen),
-            'iso10126' => $data . ($padLen > 1 ? random_bytes($padLen - 1) : '') . chr($padLen),
+            'iso10126' => $data . random_bytes($padLen - 1) . chr($padLen),
             'ansix923' => $data . str_repeat("\0", $padLen - 1) . chr($padLen),
             default => throw new InvalidKeyException('Unsupported padding: ' . $padding),
         };

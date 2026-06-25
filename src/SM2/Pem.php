@@ -626,8 +626,12 @@ class Pem
                     throw new InvalidKeyException('Invalid SEC1 private key: invalid public key parameters');
                 }
                 $pointData = substr($der, $offset, $bsLen - 1);
-                if (strlen($pointData) !== 65 || ord($pointData[0]) !== 0x04) {
-                    throw new InvalidKeyException('Invalid SEC1 private key: expected uncompressed public key');
+                $pointTag = ord($pointData[0]);
+                if ($pointTag === 0x02 || $pointTag === 0x03) {
+                    throw new InvalidKeyException('Invalid SEC1 private key: compressed EC points are not supported (expected uncompressed format starting with 0x04)');
+                }
+                if (strlen($pointData) !== 65 || $pointTag !== 0x04) {
+                    throw new InvalidKeyException('Invalid SEC1 private key: expected uncompressed public key (0x04 || x || y)');
                 }
                 $publicKey = bin2hex(substr($pointData, 1));
                 $offset = $ctxEnd;
@@ -824,8 +828,12 @@ class Pem
                     throw new InvalidKeyException('Invalid SEC1 inner: invalid public key parameters');
                 }
                 $pointData = substr($der, $offset, $bsLen - 1);
-                if (strlen($pointData) !== 65 || ord($pointData[0]) !== 0x04) {
-                    throw new InvalidKeyException('Invalid SEC1 inner: expected uncompressed public key');
+                $pointTag = ord($pointData[0]);
+                if ($pointTag === 0x02 || $pointTag === 0x03) {
+                    throw new InvalidKeyException('Invalid SEC1 inner: compressed EC points are not supported (expected uncompressed format starting with 0x04)');
+                }
+                if (strlen($pointData) !== 65 || $pointTag !== 0x04) {
+                    throw new InvalidKeyException('Invalid SEC1 inner: expected uncompressed public key (0x04 || x || y)');
                 }
                 $publicKey = bin2hex(substr($pointData, 1));
                 $offset = $ctxEnd;
@@ -916,8 +924,12 @@ class Pem
         $pointData = substr($der, $offset, $bsLen - 1);
         $offset += $bsLen - 1;
 
-        if (strlen($pointData) !== 65 || ord($pointData[0]) !== 0x04) {
-            throw new InvalidKeyException('Invalid public key: expected uncompressed point (04 || x || y)');
+        $pointTag = ord($pointData[0]);
+        if ($pointTag === 0x02 || $pointTag === 0x03) {
+            throw new InvalidKeyException('Invalid public key: compressed EC points are not supported (expected uncompressed format starting with 0x04)');
+        }
+        if (strlen($pointData) !== 65 || $pointTag !== 0x04) {
+            throw new InvalidKeyException('Invalid public key: expected uncompressed point (0x04 || x || y)');
         }
 
         $publicKey = bin2hex(substr($pointData, 1));

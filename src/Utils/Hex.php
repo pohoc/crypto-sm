@@ -12,7 +12,7 @@ class Hex
     /**
      * Convert a hex string to a byte array.
      *
-     * @param  string         $hex Hex string (odd-length will be zero-padded)
+     * @param  string         $hex Hex string (odd-length will be zero-padded for backward compatibility)
      * @return array<int,int> Array of byte values (0-255)
      */
     public static function toBytes(string $hex): array
@@ -59,7 +59,7 @@ class Hex
     /**
      * Convert a hex string to a binary string.
      *
-     * @param  string $hex Hex string (odd-length will be zero-padded)
+     * @param  string $hex Hex string (odd-length will be zero-padded for backward compatibility)
      * @return string Binary string, or empty string on invalid input
      */
     public static function fromHex(string $hex): string

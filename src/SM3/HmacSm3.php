@@ -22,25 +22,22 @@ class HmacSm3
     /**
      * Compute HMAC-SM3 of the given data with the given key.
      *
-     * @param  string $key  Secret key (any length; if > 64 bytes it will be hashed)
+     * @param  string $key  Secret key (any length; if > 64 bytes it will be hashed per RFC 2104)
      * @param  string $data Data to authenticate
      * @return string 64-character hex string (256-bit HMAC)
      */
     public static function hmac(string $key, string $data): string
     {
-        // If key is longer than block size, hash it first
         if (strlen($key) > self::BLOCK_SIZE) {
             $key = Hex::fromHex(Sm3::sm3($key));
+            assert(strlen($key) <= self::BLOCK_SIZE, 'SM3 hash output must fit within HMAC block size');
         }
 
-        // Pad key to block size
         $key = str_pad($key, self::BLOCK_SIZE, "\0");
 
-        // Create ipad and opad keys
         $iKeyPad = $key ^ str_repeat(chr(0x36), self::BLOCK_SIZE);
         $oKeyPad = $key ^ str_repeat(chr(0x5C), self::BLOCK_SIZE);
 
-        // HMAC = SM3(oKeyPad || SM3(iKeyPad || data))
         $innerHash = Sm3::sm3($iKeyPad . $data);
         return Sm3::sm3($oKeyPad . Hex::fromHex($innerHash));
     }
@@ -64,6 +61,7 @@ class HmacSm3
     {
         if (strlen($key) > self::BLOCK_SIZE) {
             $key = Hex::fromHex(Sm3::sm3($key));
+            assert(strlen($key) <= self::BLOCK_SIZE, 'SM3 hash output must fit within HMAC block size');
         }
         $key = str_pad($key, self::BLOCK_SIZE, "\0");
 

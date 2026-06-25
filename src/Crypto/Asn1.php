@@ -54,10 +54,8 @@ class Asn1
             throw new CryptoException('Invalid DER INTEGER: non-minimal encoding');
         }
 
-        $value = ltrim(bin2hex($valueBytes), '0');
-        if ($value === '') {
-            $value = '0';
-        }
+        $hex = bin2hex($valueBytes);
+        $value = preg_replace('/^0+(?=[0-9a-f])/', '', $hex) ?: '0';
 
         return gmp_strval(gmp_init($value, 16), 10);
     }
@@ -159,6 +157,9 @@ class Asn1
      */
     public static function encodeInteger(string $hex): string
     {
+        if (strlen($hex) % 2 !== 0) {
+            throw new CryptoException('Invalid hex for integer encoding: odd length');
+        }
         if (!preg_match('/^[0-9a-fA-F]+$/', $hex)) {
             throw new CryptoException('Invalid hex for integer encoding');
         }
