@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CryptoSm\SM4;
 
+use CryptoSm\Crypto\Gcm;
 use CryptoSm\Exception\InvalidKeyException;
 
 /**
@@ -72,6 +73,10 @@ class Sm4Options
     /**
      * Set the cipher mode.
      *
+     * Setting the SAME mode again is a no-op and preserves any cached IV.
+     * Changing to a DIFFERENT mode resets the IV because IV length rules
+     * differ between modes (see setIv()).
+     *
      * @param  string              $mode Cipher mode: Sm4::MODE_ECB, Sm4::MODE_CBC, Sm4::MODE_CFB, Sm4::MODE_OFB, Sm4::MODE_CTR, or Sm4::MODE_GCM
      * @return self
      * @throws InvalidKeyException If mode value is invalid
@@ -79,6 +84,9 @@ class Sm4Options
     public function setMode(string $mode): self
     {
         $mode = strtolower($mode);
+        if ($mode === $this->mode) {
+            return $this;
+        }
         $valid = [Sm4::MODE_ECB, Sm4::MODE_CBC, Sm4::MODE_CFB, Sm4::MODE_OFB, Sm4::MODE_CTR, Sm4::MODE_GCM];
         if (!in_array($mode, $valid, true)) {
             throw new InvalidKeyException('Mode must be one of: ' . implode(', ', $valid));
@@ -110,6 +118,18 @@ class Sm4Options
                 : bin2hex(random_bytes(16));
         }
         return $this->iv;
+    }
+
+    /**
+     * Whether an IV is already available (explicitly set or previously materialized).
+     *
+     * Unlike getIv(), this never generates a random IV. Decryption MUST have a
+     * concrete IV: silently generating one would produce garbage plaintext, so
+     * Sm4::decrypt() rejects options whose IV has not been set.
+     */
+    public function hasIv(): bool
+    {
+        return $this->iv !== null;
     }
 
     /**
@@ -192,9 +212,8 @@ class Sm4Options
      */
     public function setTagLength(int $tagLength): self
     {
-        $valid = [4, 8, 12, 13, 14, 15, 16];
-        if (!in_array($tagLength, $valid, true)) {
-            throw new InvalidKeyException('GCM tag length must be one of: ' . implode(', ', $valid));
+        if (!in_array($tagLength, Gcm::VALID_TAG_LENGTHS, true)) {
+            throw new InvalidKeyException('GCM tag length must be one of: ' . implode(', ', Gcm::VALID_TAG_LENGTHS));
         }
         $this->tagLength = $tagLength;
         return $this;

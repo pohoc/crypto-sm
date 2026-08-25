@@ -12,3 +12,4 @@ composer.lock
 .php-cs-fixer.cache
 coverage/
 build/
+.codegraph/

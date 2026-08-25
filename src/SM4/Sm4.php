@@ -194,19 +194,13 @@ class Sm4 implements CipherInterface
         return self::decrypt($ciphertext, $key, $options);
     }
 
-    /** @var bool|null Cached availability of OpenSSL SM4 cipher support */
-    private static ?bool $openSslSm4Available = null;
-
     /**
      * Check whether the OpenSSL extension provides SM4 cipher support.
+     * Result is cached per process (see Sm4PurePhp::openSslSm4Available()).
      */
     public static function openSslSm4Available(): bool
     {
-        if (self::$openSslSm4Available === null) {
-            self::$openSslSm4Available = extension_loaded('openssl')
-                && in_array('SM4-ECB', openssl_get_cipher_methods(), true);
-        }
-        return self::$openSslSm4Available;
+        return Sm4PurePhp::openSslSm4Available();
     }
 
     private static function crypt(string $data, string $key, bool $encrypt, ?Sm4Options $options = null, bool $selfContainedDefault = false): string
@@ -216,6 +210,19 @@ class Sm4 implements CipherInterface
         $padding = strtolower($options->getPadding());
 
         self::validateHexKey($key);
+
+        // Decryption requires a concrete IV: lazily generating a random one here
+        // would silently produce garbage plaintext, so reject missing IVs instead.
+        // The self-contained format (options omitted, CBC) extracts its IV from
+        // the ciphertext prefix below and is therefore exempt.
+        if (!$encrypt && $mode !== self::MODE_ECB && !$options->hasIv()
+            && !($selfContainedDefault && $mode === self::MODE_CBC)) {
+            throw new InvalidKeyException(
+                'IV is required for SM4 ' . strtoupper($mode)
+                . ' decryption: pass the same IV used during encryption via Sm4Options::setIv(),'
+                . ' or omit options to use the self-contained iv+ciphertext format'
+            );
+        }
 
         if ($mode === self::MODE_GCM) {
             return self::cryptGcm($data, $key, $encrypt, $options);
@@ -489,8 +496,20 @@ class Sm4 implements CipherInterface
     /** @var array<string, Gcm> Cached GCM instances keyed by hex key */
     private static array $gcmCache = [];
 
-    /** @var array<string, array<string, true>>|null Tracks used (key, IV) pairs to prevent IV reuse in GCM (null=disabled) */
-    private static ?array $gcmUsedIvs = null;
+    /** Maximum number of tracked (key, IV) pairs before further GCM encryptions are refused */
+    private const MAX_TRACKED_GCM_IVS = 65536;
+
+    /**
+     * Tracks used key||IV pairs to prevent catastrophic GCM IV reuse.
+     *
+     * Tracking is ENABLED BY DEFAULT because reusing an IV with the same key in
+     * GCM destroys all confidentiality and authenticity guarantees. The table
+     * is process-local best-effort: across process restarts a fresh random IV
+     * (the default) remains mandatory. Set to null to disable tracking.
+     *
+     * @var array<string, true>|null
+     */
+    private static ?array $gcmUsedIvs = [];
 
     public static function warmupGcm(string $key): void
     {
@@ -510,8 +529,10 @@ class Sm4 implements CipherInterface
 
     /**
      * Enable or disable GCM IV reuse tracking.
-     * Tracking is disabled by default to maintain backward compatibility with existing tests.
-     * Enable it in production to detect catastrophic IV reuse bugs early.
+     *
+     * Tracking is enabled by default: encrypting twice with the same key and IV
+     * throws CryptoException. Disable only for legacy compatibility, and prefer
+     * calling resetIv() (or omitting options) so every encryption gets a fresh IV.
      */
     public static function enableGcmIvTracking(bool $enabled = true): void
     {
@@ -546,11 +567,21 @@ class Sm4 implements CipherInterface
         }
 
         if ($encrypt && self::$gcmUsedIvs !== null) {
-            self::$gcmUsedIvs[$key] ??= [];
-            if (isset(self::$gcmUsedIvs[$key][$iv])) {
-                throw new CryptoException('GCM IV reuse detected: same IV used twice with the same key is catastrophic');
+            $trackingId = $key . ':' . $iv;
+            if (isset(self::$gcmUsedIvs[$trackingId])) {
+                throw new CryptoException(
+                    'GCM IV reuse detected: the same IV was used twice with the same key,'
+                    . ' which is catastrophic for GCM security. Generate a fresh IV for each encryption.'
+                );
             }
-            self::$gcmUsedIvs[$key][$iv] = true;
+            if (count(self::$gcmUsedIvs) >= self::MAX_TRACKED_GCM_IVS) {
+                throw new CryptoException(
+                    'SM4-GCM IV tracking table is full (' . self::MAX_TRACKED_GCM_IVS . ' entries):'
+                    . ' call Sm4::resetGcmIvTracking() periodically, or disable tracking via'
+                    . ' Sm4::enableGcmIvTracking(false) if your application guarantees unique IVs itself'
+                );
+            }
+            self::$gcmUsedIvs[$trackingId] = true;
         }
 
         if (!isset(self::$gcmCache[$key])) {
@@ -666,7 +697,7 @@ class Sm4 implements CipherInterface
         return match ($padding) {
             'pkcs5', 'pkcs7' => $data . str_repeat(chr($padLen), $padLen),
             'zero' => $data . str_repeat("\0", $padLen),
-            'iso10126' => $data . random_bytes($padLen - 1) . chr($padLen),
+            'iso10126' => $data . ($padLen > 1 ? random_bytes($padLen - 1) : '') . chr($padLen),
             'ansix923' => $data . str_repeat("\0", $padLen - 1) . chr($padLen),
             default => throw new InvalidKeyException('Unsupported padding: ' . $padding),
         };

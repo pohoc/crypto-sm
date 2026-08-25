@@ -38,7 +38,7 @@ $plaintext = Sm4::decrypt($ciphertext, $key, $options);
 ```
 
 > **注意**：默认模式已从 ECB 改为 CBC。ECB 模式不安全，仅建议在兼容旧系统时使用。
-> 不传 `Sm4Options` 时，默认 CBC 返回 `iv_hex + ciphertext_hex`，可直接传给 `Sm4::decrypt()`；显式传入 `Sm4Options` 时返回值只包含密文，调用方必须保存 IV。
+> 不传 `Sm4Options` 时，默认 CBC 返回 `iv_hex + ciphertext_hex`，可直接传给 `Sm4::decrypt()`；显式传入 `Sm4Options` 时返回值只包含密文，调用方必须保存 IV 并在解密时通过 `setIv()` 传回（解密缺 IV 会抛出异常，不会静默生成随机 IV）。
 
 ## 加密模式
 
@@ -197,10 +197,39 @@ $ciphertext = Sm4::encrypt($data, $key, $options);
 
 #### GCM 使用约束
 
-- 同一把密钥下，IV 不能重复使用
+- 同一把密钥下，IV 不能重复使用（NIST SP 800-38D：这是 GCM 安全性的硬性要求）
+- **IV 重用检测默认开启**：同一进程内用相同 key+IV 加密第二次会抛出 `CryptoException`。
+  可通过 `Sm4::enableGcmIvTracking(false)` 关闭，`Sm4::resetGcmIvTracking()` 清空记录
 - 推荐使用 12 字节 IV
 - GCM 路径的正确性通过测试向量覆盖，但吞吐量会低于 CBC/CTR
 - 如果你看到 GCM 明显慢于 CBC/CTR，这是当前实现的预期性能特征
+
+#### GCM IV 重用检测
+
+IV 重用对 GCM 是灾难性的（会泄露认证密钥并破坏保密性）。本库默认在进程内追踪已使用的 key+IV 组合：
+
+```php
+use CryptoSm\SM4\Sm4;
+
+// 默认已开启，无需调用；此处仅作演示
+Sm4::enableGcmIvTracking(true);
+
+try {
+    Sm4::encrypt($data, $key, $options);   // 第一次：正常
+    Sm4::encrypt($data, $key, $options);   // 第二次同 IV：抛出 CryptoException
+} catch (\CryptoSm\Exception\CryptoException $e) {
+    // GCM IV reuse detected ...
+}
+
+Sm4::resetGcmIvTracking();                 // 清空追踪表（长生命周期进程可定期调用）
+Sm4::enableGcmIvTracking(false);           // 关闭检测（不推荐）
+```
+
+> **注意**：
+> - 追踪表是**进程内**的尽力而为保护，跨进程重启无法覆盖——每次加密生成全新随机 IV 才是根本方案
+> - 追踪条目上限 65536 条，达到上限后会拒绝加密并提示清理；推荐业务直接使用 `Sm4::encryptPayload()`，
+>   它每次自动生成全新随机 IV 并随密文一起存储
+> - `Sm4::enableGcmIvTracking(false)` 仅为迁移旧代码提供逃生口，新代码不要关闭
 
 ## 填充模式
 
@@ -372,9 +401,12 @@ try {
 2. **CBC 模式**需配合 HMAC 等机制保证完整性
 3. **ECB 模式不安全**，相同明文产生相同密文，仅用于兼容旧系统
 4. 在 CBC/CFB/OFB/CTR 模式下，每次加密操作都应使用随机的 IV
-5. GCM 模式的 IV 绝不能重复使用同一密钥加密不同数据
-6. 显式传入 `Sm4Options` 时，密文不内嵌 IV，调用方必须单独保存并在解密时设置同一个 IV
+5. GCM 模式的 IV 绝不能重复使用同一密钥加密不同数据（本库默认检测并拒绝）
+6. 显式传入 `Sm4Options` 时，密文不内嵌 IV，调用方必须单独保存并**在解密时通过 `setIv()` 传回同一个 IV**；
+   解密时未设置 IV 会直接抛出 `InvalidKeyException`（不会静默生成随机 IV 导致乱码）
 7. 安全存储密钥（使用环境变量或安全的密钥管理）
+8. 推荐业务封装直接使用 `Sm4::encryptPayload()` / `Sm4::decryptPayload()`：自动生成新 IV、自动携带 IV/tag 元数据，
+   从根本上避免 IV 管理错误
 
 ## 错误处理
 

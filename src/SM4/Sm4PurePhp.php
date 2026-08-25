@@ -108,12 +108,15 @@ final class Sm4PurePhp
         $this->keyInitialized = true;
     }
 
+    /** @var bool|null Cached availability of the OpenSSL SM4-ECB cipher */
+    private static ?bool $openSslSm4Available = null;
+
     /**
-     * Check if this platform can use OpenSSL SM4.
+     * Check if this platform can use OpenSSL SM4 (result cached per process).
      */
     public static function openSslSm4Available(): bool
     {
-        return function_exists('openssl_encrypt')
+        return self::$openSslSm4Available ??= function_exists('openssl_encrypt')
             && in_array('SM4-ECB', openssl_get_cipher_methods(), true);
     }
 

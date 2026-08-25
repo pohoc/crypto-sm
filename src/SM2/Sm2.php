@@ -526,9 +526,13 @@ class Sm2 implements SignerInterface, CipherInterface
 
     private static function getUserIdHash(string $userId, string $x, string $y): string
     {
+        // GM/T 0003-2012 Annex A: ENTL is a fixed 16-bit field holding the bit
+        // length of ENT (the user ID). IDs whose bit length exceeds 0xFFFF have
+        // no valid encoding and MUST be rejected instead of being truncated or
+        // emitted with an oversized length prefix.
         $len = strlen($userId) * 8;
-        if ($len > 0xFFFFFFFF) {
-            throw new CryptoException('SM2 user ID too long: bit length exceeds 32-bit limit');
+        if ($len > 0xFFFF) {
+            throw new CryptoException('SM2 user ID too long: ENTL is a 16-bit field, the user ID must be at most 8191 bytes');
         }
         $userIdHex = Hex::toHexString($userId);
 
@@ -537,12 +541,7 @@ class Sm2 implements SignerInterface, CipherInterface
         $gX = self::$eccTable['gX'];
         $gY = self::$eccTable['gY'];
 
-        $lenHex = sprintf('%04x', $len & 0xFFFF);
-        if ($len > 0xFFFF) {
-            $lenHex = sprintf('%08x', $len);
-        }
-
-        return $lenHex . $userIdHex . $a . $b . $gX . $gY . $x . $y;
+        return sprintf('%04x', $len) . $userIdHex . $a . $b . $gX . $gY . $x . $y;
     }
 
     /**

@@ -35,46 +35,7 @@ class Pem
      */
     public static function exportPrivateKey(string $privateKey, string $publicKey = ''): string
     {
-        if (!preg_match('/^[0-9a-fA-F]{64}$/', $privateKey)) {
-            throw new InvalidKeyException('Private key must be 64 hex chars');
-        }
-
-        // SEC 1 structure:
-        // SEQUENCE {
-        //   INTEGER 1 (version)
-        //   OCTET STRING <privateKey>
-        //   [0] OID <curve> (optional)
-        //   [1] BIT STRING <publicKey> (optional)
-        // }
-
-        $version = "\x02\x01\x01"; // INTEGER 1
-        $privKeyBytes = hex2bin($privateKey);
-        if ($privKeyBytes === false) {
-            throw new InvalidKeyException('Invalid private key hex');
-        }
-        $privKeyOctetString = "\x04" . self::encodeDerLength(strlen($privKeyBytes)) . $privKeyBytes;
-
-        // Context-specific [0] with SM2 OID
-        $oidBytes = self::encodeOid(self::OID_SM2);
-        $curveCtx = "\xa0" . self::encodeDerLength(strlen($oidBytes)) . $oidBytes;
-
-        // Context-specific [1] with public key (if provided)
-        $pubKeyCtx = '';
-        if ($publicKey !== '') {
-            if (!preg_match('/^[0-9a-fA-F]{128}$/', $publicKey)) {
-                throw new InvalidKeyException('Public key must be 128 hex chars');
-            }
-            // Uncompressed point: 04 || x || y
-            $pubPoint = "\x04" . hex2bin($publicKey);
-            // BIT STRING: 00 (no unused bits) || uncompressed point
-            $bitString = "\x03" . self::encodeDerLength(strlen($pubPoint) + 1) . "\x00" . $pubPoint;
-            $pubKeyCtx = "\xa1" . self::encodeDerLength(strlen($bitString)) . $bitString;
-        }
-
-        $content = $version . $privKeyOctetString . $curveCtx . $pubKeyCtx;
-        $sequence = "\x30" . self::encodeDerLength(strlen($content)) . $content;
-
-        return self::wrapPem('EC PRIVATE KEY', $sequence);
+        return self::wrapPem('EC PRIVATE KEY', self::buildSec1PrivateKeyDer($privateKey, $publicKey));
     }
 
     /**
@@ -86,37 +47,7 @@ class Pem
      */
     public static function exportPrivateKeyPkcs8(string $privateKey): string
     {
-        if (!preg_match('/^[0-9a-fA-F]{64}$/', $privateKey)) {
-            throw new InvalidKeyException('Private key must be 64 hex chars');
-        }
-
-        // PKCS#8 structure:
-        // SEQUENCE {
-        //   INTEGER 0 (version)
-        //   SEQUENCE { OID ecPublicKey, OID sm2 }
-        //   OCTET STRING { SEC1 private key structure }
-        // }
-
-        $version = "\x02\x01\x00"; // INTEGER 0
-
-        $algId = self::encodeOid(self::OID_EC_PUBLIC_KEY);
-        $curveOid = self::encodeOid(self::OID_SM2);
-        $algSeq = "\x30" . self::encodeDerLength(strlen($algId) + strlen($curveOid)) . $algId . $curveOid;
-
-        // SEC1 private key structure: SEQUENCE { INTEGER 1, OCTET STRING <key> }
-        $sec1Version = "\x02\x01\x01"; // INTEGER 1
-        $privKeyBytes = hex2bin($privateKey);
-        if ($privKeyBytes === false) {
-            throw new InvalidKeyException('Invalid private key hex');
-        }
-        $sec1KeyOctet = "\x04" . self::encodeDerLength(strlen($privKeyBytes)) . $privKeyBytes;
-        $sec1Content = $sec1Version . $sec1KeyOctet;
-        $sec1Seq = "\x30" . self::encodeDerLength(strlen($sec1Content)) . $sec1Content;
-
-        $content = $version . $algSeq . "\x04" . self::encodeDerLength(strlen($sec1Seq)) . $sec1Seq;
-        $sequence = "\x30" . self::encodeDerLength(strlen($content)) . $content;
-
-        return self::wrapPem('PRIVATE KEY', $sequence);
+        return self::wrapPem('PRIVATE KEY', self::buildPkcs8PrivateKeyDer($privateKey));
     }
 
     /**
@@ -128,29 +59,7 @@ class Pem
      */
     public static function exportPublicKey(string $publicKey): string
     {
-        if (!preg_match('/^[0-9a-fA-F]{128}$/', $publicKey)) {
-            throw new InvalidKeyException('Public key must be 128 hex chars');
-        }
-
-        // SubjectPublicKeyInfo structure:
-        // SEQUENCE {
-        //   SEQUENCE { OID ecPublicKey, OID sm2 }
-        //   BIT STRING <uncompressed point>
-        // }
-
-        $algId = self::encodeOid(self::OID_EC_PUBLIC_KEY);
-        $curveOid = self::encodeOid(self::OID_SM2);
-        $algSeq = "\x30" . self::encodeDerLength(strlen($algId) + strlen($curveOid)) . $algId . $curveOid;
-
-        // Uncompressed point: 04 || x || y
-        $pubPoint = "\x04" . hex2bin($publicKey);
-        // BIT STRING: 00 (no unused bits) || point
-        $bitString = "\x03" . self::encodeDerLength(strlen($pubPoint) + 1) . "\x00" . $pubPoint;
-
-        $content = $algSeq . $bitString;
-        $sequence = "\x30" . self::encodeDerLength(strlen($content)) . $content;
-
-        return self::wrapPem('PUBLIC KEY', $sequence);
+        return self::wrapPem('PUBLIC KEY', self::buildSpkiPublicKeyDer($publicKey));
     }
 
     /**
@@ -163,32 +72,7 @@ class Pem
      */
     public static function exportPrivateKeyDer(string $privateKey, string $publicKey = ''): string
     {
-        if (!preg_match('/^[0-9a-fA-F]{64}$/', $privateKey)) {
-            throw new InvalidKeyException('Private key must be 64 hex chars');
-        }
-
-        $version = "\x02\x01\x01";
-        $privKeyBytes = hex2bin($privateKey);
-        if ($privKeyBytes === false) {
-            throw new InvalidKeyException('Invalid private key hex');
-        }
-        $privKeyOctetString = "\x04" . self::encodeDerLength(strlen($privKeyBytes)) . $privKeyBytes;
-
-        $oidBytes = self::encodeOid(self::OID_SM2);
-        $curveCtx = "\xa0" . self::encodeDerLength(strlen($oidBytes)) . $oidBytes;
-
-        $pubKeyCtx = '';
-        if ($publicKey !== '') {
-            if (!preg_match('/^[0-9a-fA-F]{128}$/', $publicKey)) {
-                throw new InvalidKeyException('Public key must be 128 hex chars');
-            }
-            $pubPoint = "\x04" . hex2bin($publicKey);
-            $bitString = "\x03" . self::encodeDerLength(strlen($pubPoint) + 1) . "\x00" . $pubPoint;
-            $pubKeyCtx = "\xa1" . self::encodeDerLength(strlen($bitString)) . $bitString;
-        }
-
-        $content = $version . $privKeyOctetString . $curveCtx . $pubKeyCtx;
-        return "\x30" . self::encodeDerLength(strlen($content)) . $content;
+        return self::buildSec1PrivateKeyDer($privateKey, $publicKey);
     }
 
     /**
@@ -200,27 +84,7 @@ class Pem
      */
     public static function exportPrivateKeyPkcs8Der(string $privateKey): string
     {
-        if (!preg_match('/^[0-9a-fA-F]{64}$/', $privateKey)) {
-            throw new InvalidKeyException('Private key must be 64 hex chars');
-        }
-
-        $version = "\x02\x01\x00";
-
-        $algId = self::encodeOid(self::OID_EC_PUBLIC_KEY);
-        $curveOid = self::encodeOid(self::OID_SM2);
-        $algSeq = "\x30" . self::encodeDerLength(strlen($algId) + strlen($curveOid)) . $algId . $curveOid;
-
-        $sec1Version = "\x02\x01\x01";
-        $privKeyBytes = hex2bin($privateKey);
-        if ($privKeyBytes === false) {
-            throw new InvalidKeyException('Invalid private key hex');
-        }
-        $sec1KeyOctet = "\x04" . self::encodeDerLength(strlen($privKeyBytes)) . $privKeyBytes;
-        $sec1Content = $sec1Version . $sec1KeyOctet;
-        $sec1Seq = "\x30" . self::encodeDerLength(strlen($sec1Content)) . $sec1Content;
-
-        $content = $version . $algSeq . "\x04" . self::encodeDerLength(strlen($sec1Seq)) . $sec1Seq;
-        return "\x30" . self::encodeDerLength(strlen($content)) . $content;
+        return self::buildPkcs8PrivateKeyDer($privateKey);
     }
 
     /**
@@ -232,19 +96,7 @@ class Pem
      */
     public static function exportPublicKeyDer(string $publicKey): string
     {
-        if (!preg_match('/^[0-9a-fA-F]{128}$/', $publicKey)) {
-            throw new InvalidKeyException('Public key must be 128 hex chars');
-        }
-
-        $algId = self::encodeOid(self::OID_EC_PUBLIC_KEY);
-        $curveOid = self::encodeOid(self::OID_SM2);
-        $algSeq = "\x30" . self::encodeDerLength(strlen($algId) + strlen($curveOid)) . $algId . $curveOid;
-
-        $pubPoint = "\x04" . hex2bin($publicKey);
-        $bitString = "\x03" . self::encodeDerLength(strlen($pubPoint) + 1) . "\x00" . $pubPoint;
-
-        $content = $algSeq . $bitString;
-        return "\x30" . self::encodeDerLength(strlen($content)) . $content;
+        return self::buildSpkiPublicKeyDer($publicKey);
     }
 
     /**
@@ -368,6 +220,111 @@ class Pem
     // ─── DER Encoding Helpers ─────────────────────────────────────────────
 
     /**
+     * Build an AlgorithmIdentifier SEQUENCE: SEQUENCE { OID ecPublicKey, OID sm2 }.
+     */
+    private static function buildAlgorithmIdentifier(): string
+    {
+        $algId = self::encodeOid(self::OID_EC_PUBLIC_KEY);
+        $curveOid = self::encodeOid(self::OID_SM2);
+        return "\x30" . self::encodeDerLength(strlen($algId) + strlen($curveOid)) . $algId . $curveOid;
+    }
+
+    /**
+     * Encode an uncompressed EC point as a DER BIT STRING (0x00 || 0x04 || x || y).
+     *
+     * @param  string              $publicKeyHex 128-char hex public key
+     * @throws InvalidKeyException If the public key format is invalid
+     */
+    private static function encodeBitStringPoint(string $publicKeyHex): string
+    {
+        $pubPoint = "\x04" . hex2bin($publicKeyHex);
+        // BIT STRING: 00 (no unused bits) || uncompressed point
+        return "\x03" . self::encodeDerLength(strlen($pubPoint) + 1) . "\x00" . $pubPoint;
+    }
+
+    /**
+     * Build a SEC 1 EC private key DER structure:
+     * SEQUENCE { INTEGER 1, OCTET STRING <key>, [0] OID <curve>, [1] BIT STRING <pub> }
+     *
+     * @param  string              $privateKey 64-char hex private key
+     * @param  string              $publicKey  128-char hex public key (optional)
+     * @throws InvalidKeyException If key format is invalid
+     */
+    private static function buildSec1PrivateKeyDer(string $privateKey, string $publicKey = ''): string
+    {
+        if (!preg_match('/^[0-9a-fA-F]{64}$/', $privateKey)) {
+            throw new InvalidKeyException('Private key must be 64 hex chars');
+        }
+        $privKeyBytes = hex2bin($privateKey);
+        if ($privKeyBytes === false) {
+            throw new InvalidKeyException('Invalid private key hex');
+        }
+
+        $version = "\x02\x01\x01"; // INTEGER 1
+        $privKeyOctetString = "\x04" . self::encodeDerLength(strlen($privKeyBytes)) . $privKeyBytes;
+        $oidBytes = self::encodeOid(self::OID_SM2);
+        $curveCtx = "\xa0" . self::encodeDerLength(strlen($oidBytes)) . $oidBytes;
+
+        $pubKeyCtx = '';
+        if ($publicKey !== '') {
+            if (!preg_match('/^[0-9a-fA-F]{128}$/', $publicKey)) {
+                throw new InvalidKeyException('Public key must be 128 hex chars');
+            }
+            $bitString = self::encodeBitStringPoint($publicKey);
+            $pubKeyCtx = "\xa1" . self::encodeDerLength(strlen($bitString)) . $bitString;
+        }
+
+        $content = $version . $privKeyOctetString . $curveCtx . $pubKeyCtx;
+        return "\x30" . self::encodeDerLength(strlen($content)) . $content;
+    }
+
+    /**
+     * Build a PKCS#8 private key DER structure:
+     * SEQUENCE { INTEGER 0, AlgorithmIdentifier, OCTET STRING { inner SEC 1 } }
+     *
+     * @param  string              $privateKey 64-char hex private key
+     * @throws InvalidKeyException If key format is invalid
+     */
+    private static function buildPkcs8PrivateKeyDer(string $privateKey): string
+    {
+        if (!preg_match('/^[0-9a-fA-F]{64}$/', $privateKey)) {
+            throw new InvalidKeyException('Private key must be 64 hex chars');
+        }
+        $privKeyBytes = hex2bin($privateKey);
+        if ($privKeyBytes === false) {
+            throw new InvalidKeyException('Invalid private key hex');
+        }
+
+        $version = "\x02\x01\x00"; // INTEGER 0
+
+        // Inner SEC1 structure: SEQUENCE { INTEGER 1, OCTET STRING <key> }
+        $sec1Version = "\x02\x01\x01";
+        $sec1KeyOctet = "\x04" . self::encodeDerLength(strlen($privKeyBytes)) . $privKeyBytes;
+        $sec1Content = $sec1Version . $sec1KeyOctet;
+        $sec1Seq = "\x30" . self::encodeDerLength(strlen($sec1Content)) . $sec1Content;
+
+        $content = $version . self::buildAlgorithmIdentifier()
+            . "\x04" . self::encodeDerLength(strlen($sec1Seq)) . $sec1Seq;
+        return "\x30" . self::encodeDerLength(strlen($content)) . $content;
+    }
+
+    /**
+     * Build a SubjectPublicKeyInfo DER structure:
+     * SEQUENCE { AlgorithmIdentifier, BIT STRING <uncompressed point> }
+     *
+     * @param  string              $publicKey 128-char hex public key
+     * @throws InvalidKeyException If key format is invalid
+     */
+    private static function buildSpkiPublicKeyDer(string $publicKey): string
+    {
+        if (!preg_match('/^[0-9a-fA-F]{128}$/', $publicKey)) {
+            throw new InvalidKeyException('Public key must be 128 hex chars');
+        }
+        $content = self::buildAlgorithmIdentifier() . self::encodeBitStringPoint($publicKey);
+        return "\x30" . self::encodeDerLength(strlen($content)) . $content;
+    }
+
+    /**
      * Encode DER length field.
      *
      * Delegates to Asn1::encodeLength() to avoid code duplication.
@@ -423,14 +380,16 @@ class Pem
 
     private static function pemToDer(string $pem): string
     {
-        // Strip headers/footers and whitespace
-        $pem = preg_replace('/-----BEGIN [^-]+-----/', '', $pem) ?? '';
-        $pem = preg_replace('/-----END [^-]+-----/', '', $pem) ?? '';
-        $pem = preg_replace('/\s+/', '', $pem) ?? '';
-        if ($pem === '') {
+        // Require a well-formed, matching BEGIN/END pair; anything outside the
+        // armor boundaries is ignored per common PEM practice.
+        if (!preg_match('/-----BEGIN ([^-]+)-----(.*?)-----END \1-----/s', $pem, $m)) {
             return '';
         }
-        $der = base64_decode($pem, true);
+        $body = preg_replace('/\s+/', '', $m[2]) ?? '';
+        if ($body === '') {
+            return '';
+        }
+        $der = base64_decode($body, true);
         return $der === false ? '' : $der;
     }
 
@@ -538,30 +497,47 @@ class Pem
      */
     private static function parseSec1PrivateKey(string $der): array
     {
+        return self::parseSec1Structure($der, 'Invalid SEC1 private key');
+    }
+
+    /**
+     * Parse a SEC 1 EC private key structure:
+     * SEQUENCE { INTEGER 1, OCTET STRING <key>, [0] OID <curve>, [1] BIT STRING <pub> }
+     *
+     * Handles both the standalone SEC 1 format and the inner SEC 1 payload
+     * embedded in a PKCS#8 OCTET STRING; only the error message prefix differs.
+     *
+     * @param  string                                       $der         DER-encoded SEC 1 structure
+     * @param  string                                       $errorPrefix Prefix used in format-specific error messages
+     * @return array{privateKey: string, publicKey: string}
+     */
+    private static function parseSec1Structure(string $der, string $errorPrefix): array
+    {
+        $prefix = $errorPrefix . ': ';
         $offset = 0;
 
         if ($offset >= strlen($der) || ord($der[$offset]) !== 0x30) {
-            throw new InvalidKeyException('Invalid SEC1 private key: expected SEQUENCE');
+            throw new InvalidKeyException($prefix . 'expected SEQUENCE');
         }
         $offset++;
         [$seqLen, $offset] = self::parseDerLength($der, $offset);
         $seqEnd = $offset + $seqLen;
         if ($seqEnd !== strlen($der)) {
-            throw new InvalidKeyException('Invalid SEC1 private key: trailing data');
+            throw new InvalidKeyException($prefix . 'trailing data');
         }
 
         if ($offset >= strlen($der) || ord($der[$offset]) !== 0x02) {
-            throw new InvalidKeyException('Invalid SEC1 private key: expected version INTEGER');
+            throw new InvalidKeyException($prefix . 'expected version INTEGER');
         }
         $offset++;
         [$verLen, $offset] = self::parseDerLength($der, $offset);
         if ($verLen !== 1 || $offset + $verLen > $seqEnd || ord($der[$offset]) !== 1) {
-            throw new InvalidKeyException('Invalid SEC1 private key: invalid version');
+            throw new InvalidKeyException($prefix . 'invalid version');
         }
         $offset += $verLen;
 
         if ($offset >= strlen($der) || ord($der[$offset]) !== 0x04) {
-            throw new InvalidKeyException('Invalid SEC1 private key: expected OCTET STRING');
+            throw new InvalidKeyException($prefix . 'expected OCTET STRING');
         }
         $offset++;
         [$keyLen, $offset] = self::parseDerLength($der, $offset);
@@ -571,7 +547,7 @@ class Pem
         $privateKeyBin = substr($der, $offset, $keyLen);
         $offset += $keyLen;
         if ($keyLen < 1 || $keyLen > 32) {
-            throw new InvalidKeyException('Invalid SEC1 private key length');
+            throw new InvalidKeyException($prefix . 'invalid private key length');
         }
 
         $privateKey = str_pad(bin2hex($privateKeyBin), 64, '0', STR_PAD_LEFT);
@@ -589,10 +565,10 @@ class Pem
                 }
                 [$curveOid, $offset] = self::decodeOid($der, $offset);
                 if ($curveOid !== self::OID_SM2) {
-                    throw new InvalidKeyException('Invalid SEC1 private key: expected SM2 curve OID, got ' . $curveOid);
+                    throw new InvalidKeyException($prefix . 'expected SM2 curve OID, got ' . $curveOid);
                 }
                 if ($offset !== $ctxEnd) {
-                    throw new InvalidKeyException('Invalid SEC1 private key: invalid curve parameters');
+                    throw new InvalidKeyException($prefix . 'invalid curve parameters');
                 }
                 $offset = $ctxEnd;
             }
@@ -600,46 +576,12 @@ class Pem
         if ($offset < $seqEnd) {
             $tag = ord($der[$offset]);
             if ($tag === 0xA1) {
-                $offset++;
-                [$ctxLen, $offset] = self::parseDerLength($der, $offset);
-                $ctxEnd = $offset + $ctxLen;
-                if ($ctxEnd > $seqEnd) {
-                    throw new InvalidKeyException('Invalid DER: unexpected end of data');
-                }
-                if ($offset >= strlen($der) || ord($der[$offset]) !== 0x03) {
-                    throw new InvalidKeyException('Invalid SEC1 private key: expected BIT STRING in [1]');
-                }
-                $offset++;
-                [$bsLen, $offset] = self::parseDerLength($der, $offset);
-                if ($bsLen < 1 || $offset >= $ctxEnd) {
-                    throw new InvalidKeyException('Invalid DER: unexpected end of data');
-                }
-                $unusedBits = ord($der[$offset]);
-                if ($unusedBits !== 0) {
-                    throw new InvalidKeyException('Invalid SEC1 private key: public key BIT STRING has unused bits');
-                }
-                $offset++;
-                if ($offset + $bsLen - 1 > $ctxEnd) {
-                    throw new InvalidKeyException('Invalid DER: unexpected end of data');
-                }
-                if ($offset + $bsLen - 1 !== $ctxEnd) {
-                    throw new InvalidKeyException('Invalid SEC1 private key: invalid public key parameters');
-                }
-                $pointData = substr($der, $offset, $bsLen - 1);
-                $pointTag = ord($pointData[0]);
-                if ($pointTag === 0x02 || $pointTag === 0x03) {
-                    throw new InvalidKeyException('Invalid SEC1 private key: compressed EC points are not supported (expected uncompressed format starting with 0x04)');
-                }
-                if (strlen($pointData) !== 65 || $pointTag !== 0x04) {
-                    throw new InvalidKeyException('Invalid SEC1 private key: expected uncompressed public key (0x04 || x || y)');
-                }
-                $publicKey = bin2hex(substr($pointData, 1));
-                $offset = $ctxEnd;
+                [$publicKey, $offset] = self::parseSec1PublicKeyBitString($der, $offset, $seqEnd, $prefix);
             }
         }
 
         if ($offset !== $seqEnd) {
-            throw new InvalidKeyException('Invalid SEC1 private key: trailing data');
+            throw new InvalidKeyException($prefix . 'trailing data');
         }
 
         if ($publicKey === '') {
@@ -648,6 +590,57 @@ class Pem
         self::validateImportedKeyPair($privateKey, $publicKey);
 
         return ['privateKey' => $privateKey, 'publicKey' => $publicKey];
+    }
+
+    /**
+     * Parse the context-specific [1] element holding the optional public key:
+     * [1] BIT STRING (0x00 || 0x04 || x || y).
+     *
+     * @param  string             $der    DER data
+     * @param  int                $offset Offset of the 0xA1 tag
+     * @param  int                $seqEnd End offset of the enclosing SEQUENCE
+     * @param  string             $prefix Error message prefix
+     * @return array{string, int} [128-char hex public key, offset past the [1] element]
+     */
+    private static function parseSec1PublicKeyBitString(string $der, int $offset, int $seqEnd, string $prefix): array
+    {
+        $offset++;
+        [$ctxLen, $offset] = self::parseDerLength($der, $offset);
+        $ctxEnd = $offset + $ctxLen;
+        if ($ctxEnd > $seqEnd) {
+            throw new InvalidKeyException('Invalid DER: unexpected end of data');
+        }
+        if ($offset >= strlen($der) || ord($der[$offset]) !== 0x03) {
+            throw new InvalidKeyException($prefix . 'expected BIT STRING in [1]');
+        }
+        $offset++;
+        [$bsLen, $offset] = self::parseDerLength($der, $offset);
+        if ($bsLen < 1 || $offset >= $ctxEnd) {
+            throw new InvalidKeyException('Invalid DER: unexpected end of data');
+        }
+        $unusedBits = ord($der[$offset]);
+        if ($unusedBits !== 0) {
+            throw new InvalidKeyException($prefix . 'public key BIT STRING has unused bits');
+        }
+        $offset++;
+        if ($offset + $bsLen - 1 > $ctxEnd) {
+            throw new InvalidKeyException('Invalid DER: unexpected end of data');
+        }
+        if ($offset + $bsLen - 1 !== $ctxEnd) {
+            throw new InvalidKeyException($prefix . 'invalid public key parameters');
+        }
+        $pointData = substr($der, $offset, $bsLen - 1);
+        if ($pointData === '') {
+            throw new InvalidKeyException($prefix . 'empty public key BIT STRING content');
+        }
+        $pointTag = ord($pointData[0]);
+        if ($pointTag === 0x02 || $pointTag === 0x03) {
+            throw new InvalidKeyException($prefix . 'compressed EC points are not supported (expected uncompressed format starting with 0x04)');
+        }
+        if (strlen($pointData) !== 65 || $pointTag !== 0x04) {
+            throw new InvalidKeyException($prefix . 'expected uncompressed public key (0x04 || x || y)');
+        }
+        return [bin2hex(substr($pointData, 1)), $ctxEnd];
     }
 
     /**
@@ -734,122 +727,13 @@ class Pem
      * Parse inner SEC1 structure (without outer SEQUENCE wrapper).
      *
      * The PKCS#8 OCTET STRING contains a full SEC1 structure:
-     * SEQUENCE { INTEGER 1, OCTET STRING <key> }
+     * SEQUENCE { INTEGER 1, OCTET STRING <key>, [0] OID <curve>, [1] BIT STRING <pub> }
      *
      * @return array{privateKey: string, publicKey: string}
      */
     private static function parseSec1PrivateKeyInner(string $der): array
     {
-        $offset = 0;
-
-        if ($offset >= strlen($der) || ord($der[$offset]) !== 0x30) {
-            throw new InvalidKeyException('Invalid SEC1 inner: expected SEQUENCE');
-        }
-        $offset++;
-        [$seqLen, $offset] = self::parseDerLength($der, $offset);
-        $seqEnd = $offset + $seqLen;
-        if ($seqEnd !== strlen($der)) {
-            throw new InvalidKeyException('Invalid SEC1 inner: trailing data');
-        }
-
-        if ($offset >= strlen($der) || ord($der[$offset]) !== 0x02) {
-            throw new InvalidKeyException('Invalid SEC1 inner: expected version INTEGER');
-        }
-        $offset++;
-        [$verLen, $offset] = self::parseDerLength($der, $offset);
-        if ($verLen !== 1 || $offset + $verLen > $seqEnd || ord($der[$offset]) !== 1) {
-            throw new InvalidKeyException('Invalid SEC1 inner: invalid version');
-        }
-        $offset += $verLen;
-
-        if ($offset >= strlen($der) || ord($der[$offset]) !== 0x04) {
-            throw new InvalidKeyException('Invalid SEC1 inner: expected OCTET STRING');
-        }
-        $offset++;
-        [$keyLen, $offset] = self::parseDerLength($der, $offset);
-        if ($offset + $keyLen > $seqEnd) {
-            throw new InvalidKeyException('Invalid DER: unexpected end of data');
-        }
-        $privateKeyBin = substr($der, $offset, $keyLen);
-        if ($keyLen < 1 || $keyLen > 32) {
-            throw new InvalidKeyException('Invalid SEC1 inner private key length');
-        }
-
-        $privateKey = str_pad(bin2hex($privateKeyBin), 64, '0', STR_PAD_LEFT);
-        Sm2::validatePrivateKey($privateKey);
-
-        $publicKey = '';
-        $offset += $keyLen;
-        if ($offset < $seqEnd) {
-            $tag = ord($der[$offset]);
-            if ($tag === 0xA0) {
-                $offset++;
-                [$ctxLen, $offset] = self::parseDerLength($der, $offset);
-                $ctxEnd = $offset + $ctxLen;
-                if ($ctxEnd > $seqEnd) {
-                    throw new InvalidKeyException('Invalid DER: unexpected end of data');
-                }
-                [$curveOid, $offset] = self::decodeOid($der, $offset);
-                if ($curveOid !== self::OID_SM2) {
-                    throw new InvalidKeyException('Invalid SEC1 inner: expected SM2 curve OID, got ' . $curveOid);
-                }
-                if ($offset !== $ctxEnd) {
-                    throw new InvalidKeyException('Invalid SEC1 inner: invalid curve parameters');
-                }
-                $offset = $ctxEnd;
-            }
-        }
-        if ($offset < $seqEnd) {
-            $tag = ord($der[$offset]);
-            if ($tag === 0xA1) {
-                $offset++;
-                [$ctxLen, $offset] = self::parseDerLength($der, $offset);
-                $ctxEnd = $offset + $ctxLen;
-                if ($ctxEnd > $seqEnd) {
-                    throw new InvalidKeyException('Invalid DER: unexpected end of data');
-                }
-                if ($offset >= strlen($der) || ord($der[$offset]) !== 0x03) {
-                    throw new InvalidKeyException('Invalid SEC1 inner: expected BIT STRING in [1]');
-                }
-                $offset++;
-                [$bsLen, $offset] = self::parseDerLength($der, $offset);
-                if ($bsLen < 1 || $offset >= $ctxEnd) {
-                    throw new InvalidKeyException('Invalid DER: unexpected end of data');
-                }
-                $unusedBits = ord($der[$offset]);
-                if ($unusedBits !== 0) {
-                    throw new InvalidKeyException('Invalid SEC1 inner: public key BIT STRING has unused bits');
-                }
-                $offset++;
-                if ($offset + $bsLen - 1 > $ctxEnd) {
-                    throw new InvalidKeyException('Invalid DER: unexpected end of data');
-                }
-                if ($offset + $bsLen - 1 !== $ctxEnd) {
-                    throw new InvalidKeyException('Invalid SEC1 inner: invalid public key parameters');
-                }
-                $pointData = substr($der, $offset, $bsLen - 1);
-                $pointTag = ord($pointData[0]);
-                if ($pointTag === 0x02 || $pointTag === 0x03) {
-                    throw new InvalidKeyException('Invalid SEC1 inner: compressed EC points are not supported (expected uncompressed format starting with 0x04)');
-                }
-                if (strlen($pointData) !== 65 || $pointTag !== 0x04) {
-                    throw new InvalidKeyException('Invalid SEC1 inner: expected uncompressed public key (0x04 || x || y)');
-                }
-                $publicKey = bin2hex(substr($pointData, 1));
-                $offset = $ctxEnd;
-            }
-        }
-
-        if ($offset !== $seqEnd) {
-            throw new InvalidKeyException('Invalid SEC1 inner: trailing data');
-        }
-
-        if ($publicKey === '') {
-            $publicKey = Sm2::getPublicKey($privateKey);
-        }
-        self::validateImportedKeyPair($privateKey, $publicKey);
-
-        return ['privateKey' => $privateKey, 'publicKey' => $publicKey];
+        return self::parseSec1Structure($der, 'Invalid SEC1 inner');
     }
 
     private static function validateImportedKeyPair(string $privateKey, string $publicKey): void
@@ -924,6 +808,9 @@ class Pem
         $pointData = substr($der, $offset, $bsLen - 1);
         $offset += $bsLen - 1;
 
+        if ($pointData === '') {
+            throw new InvalidKeyException('Invalid public key: empty BIT STRING content');
+        }
         $pointTag = ord($pointData[0]);
         if ($pointTag === 0x02 || $pointTag === 0x03) {
             throw new InvalidKeyException('Invalid public key: compressed EC points are not supported (expected uncompressed format starting with 0x04)');

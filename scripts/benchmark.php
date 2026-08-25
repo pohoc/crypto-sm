@@ -453,13 +453,18 @@ $sm4GcmEncResults = [];
 $sm4GcmDecResults = [];
 foreach ([64, 256, 1024] as $size) {
     $data = str_repeat('A', $size);
-    $options = (new Sm4Options())->setMode('gcm')->setIv($sm4GcmIv);
-    $ct = Sm4::encrypt($data, $sm4Key, $options);
+    // GCM 禁止同一 key+IV 加密两次（IV 重用检测默认开启），
+    // 因此每次加密迭代都生成全新随机 IV；解密迭代复用对应的 IV。
     $sm4GcmEncResults[] = benchmark(
         "SM4-GCM 加密 ({$size}B)",
-        fn () => Sm4::encrypt($data, $sm4Key, $options),
+        function () use ($data, $sm4Key) {
+            $options = (new Sm4Options())->setMode('gcm')->setIv(bin2hex(random_bytes(12)));
+            return Sm4::encrypt($data, $sm4Key, $options);
+        },
         GCM_ITERATIONS,
     );
+    $options = (new Sm4Options())->setMode('gcm')->setIv($sm4GcmIv);
+    $ct = Sm4::encrypt($data, $sm4Key, $options);
     $sm4GcmDecResults[] = benchmark(
         "SM4-GCM 解密 ({$size}B)",
         fn () => Sm4::decrypt($ct, $sm4Key, $options),
@@ -478,10 +483,13 @@ foreach ($sm4GcmDecResults as $r) {
 
 // GCM with AAD
 echo "\n  GCM + AAD (附加认证数据):\n";
-$optionsWithAad = (new Sm4Options())->setMode('gcm')->setIv($sm4GcmIv)->setAad('additional authenticated data for benchmark');
 $r = benchmark(
     'SM4-GCM 加密 + AAD (256B)',
-    fn () => Sm4::encrypt(str_repeat('A', 256), $sm4Key, $optionsWithAad),
+    function () use ($sm4Key): string {
+        $optionsWithAad = (new Sm4Options())->setMode('gcm')->setIv(bin2hex(random_bytes(12)))
+            ->setAad('additional authenticated data for benchmark');
+        return Sm4::encrypt(str_repeat('A', 256), $sm4Key, $optionsWithAad);
+    },
     GCM_ITERATIONS,
 );
 printResult($r);

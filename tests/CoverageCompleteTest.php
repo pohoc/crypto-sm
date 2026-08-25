@@ -311,7 +311,8 @@ class CoverageCompleteTest extends TestCase
     public function testSm4GcmWithTagLength(int $tagLength): void
     {
         $key = str_repeat('e', 32);
-        $iv = str_repeat('12', 16);
+        // IV 必须随用例唯一：GCM 禁止同一 key+IV 复用（检测默认开启）
+        $iv = str_repeat('12', 14) . sprintf('%04x', $tagLength);
         $plaintext = 'Test GCM tag length ' . $tagLength;
 
         $opts = (new Sm4Options())
@@ -328,15 +329,15 @@ class CoverageCompleteTest extends TestCase
     public function testSm4GcmWithAadAndTagLength(): void
     {
         $key = str_repeat('ff', 16);
-        $iv = str_repeat('ab', 16);
         $aad = 'authenticated data';
         $plaintext = 'secret message';
 
         $tagLengths = [4, 8, 12, 16];
         foreach ($tagLengths as $tl) {
+            // 每个 tagLength 用例使用独立 IV，避免跨迭代触发 GCM IV 重用检测
             $opts = (new Sm4Options())
                 ->setMode(Sm4::MODE_GCM)
-                ->setIv($iv)
+                ->setIv(str_repeat('ab', 14) . sprintf('%04x', $tl))
                 ->setAad($aad)
                 ->setTagLength($tl);
 
@@ -761,9 +762,10 @@ class CoverageCompleteTest extends TestCase
         $key = str_repeat('ab', 16);
         $data = 'GCM through facade';
 
+        // 随机 IV：GCM 禁止同一 key+IV 复用（检测默认开启）
         $opts = (new Sm4Options())
             ->setMode(Sm4::MODE_GCM)
-            ->setIv(str_repeat('12', 16));
+            ->setIv(bin2hex(random_bytes(12)));
 
         $ct = SmCrypto::sm4Encrypt($data, $key, $opts);
         $pt = SmCrypto::sm4Decrypt($ct, $key, $opts);

@@ -25,6 +25,9 @@ use CryptoSm\Utils\Hex;
  */
 class KeyExchange
 {
+    /** Maximum derived key length in bytes accepted by the key exchange (1 MiB, far above any legitimate use) */
+    public const MAX_KLEN = 1048576;
+
     /**
      * Generate an ephemeral keypair for key exchange.
      *
@@ -281,14 +284,17 @@ class KeyExchange
         if ($klen <= 0) {
             throw new InvalidKeyException('Key length (klen) must be greater than 0');
         }
+        if ($klen > self::MAX_KLEN) {
+            throw new InvalidKeyException('Key length (klen) must not exceed ' . self::MAX_KLEN . ' bytes');
+        }
 
         // Compute own ephemeral public key
         $R_self = Sm2::getPublicKey($r);
 
-        // w = ⌈⌈log₂(n)⌉/2⌉ - 1
+        // w = ⌈⌈log₂(n)⌉/2⌉ - 1, computed exactly from the bit length of n
         $n = Sm2::gmpParamPublic('n');
-        $bitLen = (int) ceil(log((float) gmp_strval($n, 10), 2) ?: 256);
-        $w = (int) ceil($bitLen / 2) - 1;
+        $bitLen = strlen(gmp_strval($n, 2));
+        $w = intdiv($bitLen + 1, 2) - 1;
 
         // x̄ = 2^w + (x & (2^w - 1))
         $twoPowW = gmp_pow(gmp_init(2), $w);

@@ -29,6 +29,12 @@ class Gcm
 {
     private const GF_POLY_HEX = '0xe1000000000000000000000000000000';
 
+    /**
+     * Valid authentication tag lengths in bytes (NIST SP 800-38D Section 5.2.1.2
+     * recommends this discrete set for interoperability).
+     */
+    public const VALID_TAG_LENGTHS = [4, 8, 12, 13, 14, 15, 16];
+
     private string $keyBin;
 
     private ?Sm4PurePhp $purePhpEngine = null;
@@ -84,7 +90,7 @@ class Gcm
 
     private function blockEncrypt(string $block): string
     {
-        if (function_exists('openssl_encrypt') && in_array('SM4-ECB', openssl_get_cipher_methods(), true)) {
+        if (Sm4PurePhp::openSslSm4Available()) {
             $result = openssl_encrypt($block, 'SM4-ECB', $this->keyBin, OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING);
             if ($result !== false) {
                 return $result;
@@ -151,8 +157,8 @@ class Gcm
         if (strlen($iv) === 0) {
             throw new CryptoException('SM4-GCM: IV must not be empty');
         }
-        if ($tagLength < 4 || $tagLength > 16) {
-            throw new CryptoException('SM4-GCM: invalid tag length (must be 4-16)');
+        if (!in_array($tagLength, self::VALID_TAG_LENGTHS, true)) {
+            throw new CryptoException('SM4-GCM: invalid tag length (must be one of ' . implode(', ', self::VALID_TAG_LENGTHS) . ' bytes)');
         }
     }
 

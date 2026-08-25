@@ -335,14 +335,14 @@ $ciphertext = SmCrypto::sm4Encrypt($data, $key, $options);
 $plaintext = SmCrypto::sm4Decrypt($ciphertext, $key, $options);
 ```
 
-> SM4 不传 `Sm4Options` 时使用默认 CBC，并返回 `iv_hex + ciphertext_hex`，可直接传给 `sm4Decrypt()`。显式传入 `Sm4Options` 时返回值只包含密文，调用方必须保存并复用同一个 IV。
+> SM4 不传 `Sm4Options` 时使用默认 CBC，并返回 `iv_hex + ciphertext_hex`，可直接传给 `sm4Decrypt()`。显式传入 `Sm4Options` 时返回值只包含密文，调用方必须保存 IV，并在解密时通过 `setIv()` 传回同一个 IV——解密缺少 IV 会抛出异常（不会静默生成随机 IV 导致乱码）。
 
 ## 特性
 
 - **零运行时依赖** — 仅需 `ext-gmp` 和 `ext-openssl`
 - **OpenSSL 加速** — SM3 和 SM4（CBC/ECB/CFB/OFB/CTR）优先使用 OpenSSL 原生实现；OpenSSL 不支持 SM4 时自动回退到纯 PHP
 - **标准合规** — 全部通过 GM/T 0002/0003/0004 标准测试向量验证（600+ 测试，1,000,000+ 断言）
-- **安全** — GCM 认证标签时序安全比较、DER 签名自动检测、安全随机数生成、SM2 签名 60000+ 次零失败验证
+- **安全** — GCM 认证标签时序安全比较、GCM IV 重用检测（默认开启）、解密缺 IV 显式报错、DER 签名自动检测、安全随机数生成、SM2 签名 60000+ 次零失败验证
 - **优雅 API** — 门面 + 子系统双层 API，选项对象链式调用，GCM warmup 预热接口
 
 ## 性能基准
