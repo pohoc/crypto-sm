@@ -463,7 +463,8 @@ foreach ([64, 256, 1024] as $size) {
         },
         GCM_ITERATIONS,
     );
-    $options = (new Sm4Options())->setMode('gcm')->setIv($sm4GcmIv);
+    // 每个数据规模使用全新 IV 做一次准备加密，供解密迭代复用
+    $options = (new Sm4Options())->setMode('gcm')->setIv(bin2hex(random_bytes(12)));
     $ct = Sm4::encrypt($data, $sm4Key, $options);
     $sm4GcmDecResults[] = benchmark(
         "SM4-GCM 解密 ({$size}B)",
