@@ -219,6 +219,29 @@ class NationalStandardConformanceTest extends TestCase
 
     // ─── GM/T 0003.5-2012 附录C：消息加解密示例 ───────────────────────────
 
+    // ─── GM/T 0003.3-2012 附录A：密钥交换示例（存档说明）──────────────────
+
+    // 官方附录A 给出了完整的密钥交换数值示例（IDA='ALICE123@YAHOO.COM'、
+    // IDB='BILL456@YAHOO.COM'、klen=128 位）：
+    //
+    //   d_A  = 6FCBA2EF9AE0AB902BC3BDE3FF915D44BA4CC78F88E2F8E7F8996D3B8CCEEDEE
+    //   r_A  = 83A2C9C8B96E5AF70BD480B472409A9A327257F1EBB73F5B073354B248668563
+    //   d_B / r_B 等其余中间值与共享密钥：
+    //   K_B  = 55B0AC62A6B927BA23703832C853DED4（128 位）
+    //
+    // ⚠️ 该示例定义在标准文本自带的**第二示例曲线**上
+    // （p=8542D69E4C044F18E8B92435BF6FF7DE457283915C45517D722EDB8B08F1DFC3，
+    //   即 SM2 主阶作为域素数；G=(421DEBD61B62EAB6...,0680512BCBB42C07...)），
+    // 而非本库实现的主推荐曲线 sm2p256v1（GM/T 0003.5 第4章参数）。
+    // 因此该向量无法在本库直接执行；其数值已由 BouncyCastle
+    // SM2KeyExchangeTest 在同参数下复现（key=55b0ac62...，
+    // 确认标签 284C8F19.../23444DAF...），证明协议公式理解无误。
+    //
+    // 本库的密钥交换符合性策略：
+    // 1) 协议步骤严格按 GM/T 0003.3 实现（w 计算、x̄ 截取、S1/S2 确认哈希）
+    // 2) 双方密钥一致性与确认标签交叉验证见 SecurityRegressionTest
+    // 3) 若未来支持多曲线，应补跑上述官方向量
+
     public function testSm2AnnexCDecryptionRecoversOfficialPlaintext(): void
     {
         // 官方值：d_A=1649AB77..., k=59276E27..., M="encryption standard"
