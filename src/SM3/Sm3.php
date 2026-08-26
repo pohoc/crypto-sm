@@ -58,6 +58,60 @@ class Sm3 implements HashInterface
     /** @var bool|null Cached availability of native SM3 support */
     private static ?bool $nativeSm3Available = null;
 
+    /** @var array{0: callable(int, int): int, 1: callable(int): int, 2: callable(int): int}|null Cached [rol, p0, p1] helpers */
+    private static ?array $roundHelpers = null;
+
+    /** @var array<int, int>|null Precomputed rotated Tj constants indexed by round number (GM/T 0004-2012) */
+    private static ?array $rotatedConstants = null;
+
+    /**
+     * Rotated Tj round constants, computed once per process.
+     *
+     * The per-round expression rol(Tj, j mod 32) only depends on the round
+     * index, so it can be tabulated instead of re-evaluated 64 times per block.
+     *
+ * @return array<int, int>
+     */
+    private static function rotatedConstants(): array
+    {
+        if (self::$rotatedConstants === null) {
+            // Runs once per process; a local closure keeps types inferable
+            $rol = static fn (int $x, int $n): int => (($x << ($n & 31)) | ($x >> (32 - ($n & 31)))) & 0xFFFFFFFF;
+            /** @var array<int, int> $table */
+            $table = [];
+            for ($j = 0; $j < 16; $j++) {
+                $table[$j] = $rol(0x79cc4519, $j);
+            }
+            for ($j = 16; $j < 64; $j++) {
+                $table[$j] = $rol(0x7a879d8a, $j % 32);
+            }
+            self::$rotatedConstants = $table;
+        }
+        return self::$rotatedConstants;
+    }
+
+    /**
+     * Shared round-function helpers, allocated once per process.
+     *
+     * Building these closures on every call dominated small-message latency
+     * (a ~200 µs floor); caching them removes that fixed cost while keeping
+     * closure-invocation speed for the ~640 calls per block.
+     *
+     * @return array{0: callable(int, int): int, 1: callable(int): int, 2: callable(int): int} [rol, p0, p1]
+     */
+    private static function roundHelpers(): array
+    {
+        if (self::$roundHelpers === null) {
+            $rol = static fn (int $x, int $n): int => (($x << ($n & 31)) | ($x >> (32 - ($n & 31)))) & 0xFFFFFFFF;
+            self::$roundHelpers = [
+                $rol,
+                static fn (int $x): int => ($x ^ $rol($x, 9) ^ $rol($x, 17)) & 0xFFFFFFFF,
+                static fn (int $x): int => ($x ^ $rol($x, 15) ^ $rol($x, 23)) & 0xFFFFFFFF,
+            ];
+        }
+        return self::$roundHelpers;
+    }
+
     // ─── Streaming API ────────────────────────────────────────────────────
 
     /** @var bool Whether native SM3 streaming is available (cached per instance) */
@@ -176,17 +230,16 @@ class Sm3 implements HashInterface
      */
     private static function processBlock(string $block, array $v): array
     {
-        $rol = static fn (int $x, int $n): int => (($x << ($n & 31)) | ($x >> (32 - ($n & 31)))) & 0xFFFFFFFF;
-        $p0 = static fn (int $x): int => ($x ^ $rol($x, 9) ^ $rol($x, 17)) & 0xFFFFFFFF;
-        $p1 = static fn (int $x): int => ($x ^ $rol($x, 15) ^ $rol($x, 23)) & 0xFFFFFFFF;
+        [$rol, $p0, $p1] = self::roundHelpers();
 
         [$w, $wPrime] = self::expandWith($block, $rol, $p1);
 
         [$a, $b, $c, $d, $e, $f, $g, $h] = $v;
+        $tRot = self::rotatedConstants();
 
         for ($j = 0; $j < 16; $j++) {
             $rolA12 = $rol($a, 12);
-            $ss1 = $rol(($rolA12 + $e + $rol(0x79cc4519, $j % 32)) & 0xFFFFFFFF, 7);
+            $ss1 = $rol(($rolA12 + $e + $tRot[$j]) & 0xFFFFFFFF, 7);
             $ss2 = $ss1 ^ $rolA12;
             $ff = $a ^ $b ^ $c;
             $gg = $e ^ $f ^ $g;
@@ -205,7 +258,7 @@ class Sm3 implements HashInterface
 
         for ($j = 16; $j < 64; $j++) {
             $rolA12 = $rol($a, 12);
-            $ss1 = $rol(($rolA12 + $e + $rol(0x7a879d8a, $j % 32)) & 0xFFFFFFFF, 7);
+            $ss1 = $rol(($rolA12 + $e + $tRot[$j]) & 0xFFFFFFFF, 7);
             $ss2 = $ss1 ^ $rolA12;
             $ff = ($a & $b) | ($a & $c) | ($b & $c);
             $gg = ($e & $f) | ((~$e) & $g);
@@ -254,7 +307,8 @@ class Sm3 implements HashInterface
      * Pure PHP SM3 implementation (fallback when OpenSSL SM3 is unavailable).
      *
      * Optimizations applied:
-     * - Inline helper functions as closures to reduce method call overhead (~640 calls/block)
+     * - Round-function closures cached per process (see roundHelpers()) to
+     *   avoid per-call allocation while keeping closure-call speed (~640 calls/block)
      * - Cache repeated sub-expressions (rol($a, 12))
      * - Remove unnecessary p32() on XOR results (XOR of 32-bit values stays within 32 bits)
      * - Unroll the j < 16 / j >= 16 branch outside the inner loop
@@ -264,20 +318,18 @@ class Sm3 implements HashInterface
         $blocks = self::pad($msg);
         $v = self::IV;
 
-        // Inline helpers as closures — significantly faster than self::method() calls
-        $rol = static fn (int $x, int $n): int => (($x << ($n & 31)) | ($x >> (32 - ($n & 31)))) & 0xFFFFFFFF;
-        $p0 = static fn (int $x): int => ($x ^ $rol($x, 9) ^ $rol($x, 17)) & 0xFFFFFFFF;
-        $p1 = static fn (int $x): int => ($x ^ $rol($x, 15) ^ $rol($x, 23)) & 0xFFFFFFFF;
+        [$rol, $p0, $p1] = self::roundHelpers();
 
         foreach ($blocks as $block) {
             [$w, $wPrime] = self::expandWith($block, $rol, $p1);
 
             [$a, $b, $c, $d, $e, $f, $g, $h] = $v;
+            $tRot = self::rotatedConstants();
 
             // Unroll j < 16 and j >= 16 phases to avoid per-iteration branch
             for ($j = 0; $j < 16; $j++) {
                 $rolA12 = $rol($a, 12);
-                $ss1 = $rol(($rolA12 + $e + $rol(0x79cc4519, $j % 32)) & 0xFFFFFFFF, 7);
+                $ss1 = $rol(($rolA12 + $e + $tRot[$j]) & 0xFFFFFFFF, 7);
                 $ss2 = $ss1 ^ $rolA12;
                 $ff = $a ^ $b ^ $c;
                 $gg = $e ^ $f ^ $g;
@@ -296,7 +348,7 @@ class Sm3 implements HashInterface
 
             for ($j = 16; $j < 64; $j++) {
                 $rolA12 = $rol($a, 12);
-                $ss1 = $rol(($rolA12 + $e + $rol(0x7a879d8a, $j % 32)) & 0xFFFFFFFF, 7);
+                $ss1 = $rol(($rolA12 + $e + $tRot[$j]) & 0xFFFFFFFF, 7);
                 $ss2 = $ss1 ^ $rolA12;
                 $ff = ($a & $b) | ($a & $c) | ($b & $c);
                 $gg = ($e & $f) | ((~$e) & $g);

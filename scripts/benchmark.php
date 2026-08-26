@@ -22,6 +22,7 @@ use CryptoSm\SM3\HmacSm3;
 use CryptoSm\SM3\Sm3;
 use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
+use CryptoSm\SM4\Sm4PurePhp;
 
 // ============================================================================
 // 配置
@@ -142,7 +143,7 @@ function printSection(string $title): void
 }
 
 /**
- * @return array<string, array{max_avg_seconds: float, note: string}>
+ * @return array<string, array{max_avg_seconds: float, note: string, requires?: string}>
  */
 function loadBaseline(): array
 {
@@ -166,10 +167,14 @@ function loadBaseline(): array
             continue;
         }
         $label = (string) $metric['label'];
-        $baseline[$label] = [
+        $entry = [
             'max_avg_seconds' => (float) $metric['max_avg_seconds'],
             'note' => isset($metric['note']) ? (string) $metric['note'] : '',
         ];
+        if (isset($metric['requires']) && is_string($metric['requires'])) {
+            $entry['requires'] = $metric['requires'];
+        }
+        $baseline[$label] = $entry;
     }
 
     return $baseline;
@@ -181,12 +186,27 @@ function printBaselineCheck(array $measured, array $baseline): void
         return;
     }
 
+    $caps = backendCapabilities();
+    $requiresLabel = [
+        'native_sm3' => '原生 SM3',
+        'native_sm4' => 'OpenSSL SM4-ECB',
+        'gmp' => 'GMP 扩展',
+    ];
+
     printSection('性能基线检查');
     echo "\n";
     printf("  %-28s  %-12s  %-12s  %-8s\n", '指标', '实测', '阈值', '结果');
     echo str_repeat('-', 72) . "\n";
 
     foreach ($baseline as $label => $config) {
+        if (isset($config['requires']) && !($caps[$config['requires']] ?? false)) {
+            // 阈值按加速后端设定；回退环境比较无意义，标记 SKIP 而非 WARN
+            $missing = $requiresLabel[$config['requires']] ?? $config['requires'];
+            printf("  %-28s  %-12s  %-12s  %-8s\n", $label, '-', formatTime($config['max_avg_seconds']), 'SKIP');
+            printf("    note: 回退环境跳过（需要 %s）\n", $missing);
+            continue;
+        }
+
         if (!isset($measured[$label])) {
             printf("  %-28s  %-12s  %-12s  %-8s\n", $label, '-', formatTime($config['max_avg_seconds']), 'MISS');
             continue;
@@ -218,11 +238,14 @@ function printSystemInfo(): void
         echo '  OpenSSL 版本:     ' . OPENSSL_VERSION_TEXT . "\n";
     }
 
-    // 检测 OpenSSL SM3 支持
-    $sm3Available = function_exists('openssl_digest') && in_array('sm3', openssl_get_md_methods(), true);
-    echo '  OpenSSL SM3:      ' . ($sm3Available ? '✓ (加速)' : '✗ (纯PHP回退)') . "\n";
+    // 后端探测必须与库的实际检测逻辑完全一致：
+    // - Sm3::computeHash() 使用 hash_algos() 判断原生 SM3
+    // - Sm4PurePhp::openSslSm4Available() 使用 openssl_get_cipher_methods() 判断 SM4-ECB
+    $caps = backendCapabilities();
+    echo '  SM3 哈希后端:     ' . ($caps['native_sm3'] ? '原生 hash() 加速' : '纯 PHP 回退 (hash_algos 无 sm3)') . "\n";
+    echo '  SM4 密码后端:     ' . ($caps['native_sm4'] ? 'OpenSSL SM4-ECB 加速' : '纯 PHP 回退 (OpenSSL 无 SM4-ECB)') . "\n";
 
-    // 检测 OpenSSL SM4-GCM 支持；当前库的 GCM 路径仍使用 Gcm 后端。
+    // 仅作环境信息展示：当前库的 GCM 路径仍使用 Gcm 后端。
     $gcmKey = hex2bin('0123456789abcdeffedcba9876543210');
     $gcmIv = random_bytes(12);
     $gcmTag = '';
@@ -230,7 +253,27 @@ function printSystemInfo(): void
     $gcmAvailable = ($gcmResult !== false);
     echo '  OpenSSL SM4-GCM:  ' . ($gcmAvailable ? '✓ (可用，当前未作为后端)' : '✗') . "\n";
 
+    if (!$caps['native_sm3'] || !$caps['native_sm4']) {
+        echo "  ⚠ 当前环境缺少原生国密加速，对称算法走纯 PHP 回退，\n";
+        echo "    相关基线阈值将标记为 SKIP 而非 WARN（见文末性能基线检查）。\n";
+    }
+
     echo '  当前时间:         ' . date('Y-m-d H:i:s') . "\n";
+}
+
+/**
+ * Backend capabilities, mirroring the library's own runtime detection.
+ *
+ * @return array{native_sm3: bool, native_sm4: bool, gmp: bool}
+ */
+function backendCapabilities(): array
+{
+    static $caps = null;
+    return $caps ??= [
+        'native_sm3' => in_array('sm3', hash_algos(), true),
+        'native_sm4' => Sm4PurePhp::openSslSm4Available(),
+        'gmp' => extension_loaded('gmp'),
+    ];
 }
 
 // ============================================================================

@@ -1,29 +1,34 @@
 {
-  "description": "Core benchmark thresholds. avg_seconds must stay below max_avg_seconds on comparable hardware and backend conditions.",
+  "description": "Core benchmark thresholds. avg_seconds must stay below max_avg_seconds on comparable hardware AND with the required backend available (see requires). When the required backend is missing the benchmark script marks the metric SKIP instead of WARN.",
   "metrics": [
     {
       "label": "SM3 哈希 (4096B)",
       "max_avg_seconds": 0.00003,
+      "requires": "native_sm3",
       "note": "OpenSSL SM3 expected."
     },
     {
       "label": "HMAC-SM3 (4096B)",
       "max_avg_seconds": 0.00003,
+      "requires": "native_sm3",
       "note": "OpenSSL SM3 expected."
     },
     {
       "label": "SM4-CBC 加密 (1024B)",
       "max_avg_seconds": 0.00002,
+      "requires": "native_sm4",
       "note": "OpenSSL backend expected."
     },
     {
       "label": "SM4-GCM 加密 (1024B)",
       "max_avg_seconds": 0.0006,
-      "note": "Allows pure-PHP fallback path."
+      "requires": "native_sm4",
+      "note": "GHASH is always pure PHP; block cipher acceleration dominates."
     },
     {
       "label": "SM2 签名 (16B)",
       "max_avg_seconds": 0.003,
+      "requires": "gmp",
       "note": "GMP extension required."
     }
   ]
