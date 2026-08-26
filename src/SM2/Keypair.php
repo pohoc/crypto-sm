@@ -45,10 +45,11 @@ class Keypair implements \JsonSerializable
     /**
      * @return string Public key only; private key is intentionally excluded from string context
      * @deprecated This method leaks the private key into string context (logs, errors, etc.).
-     *             Use getPrivateKey() / getPublicKey() explicitly. Will be removed in v3.0.
+     *             Use getPrivateKey() / getPublicKey() explicitly. Will be removed in a future major release.
      */
     public function __toString(): string
     {
+        @trigger_error('CryptoSm\SM2\Keypair::__toString is deprecated and will be removed in a future major release. Use getPublicKey() explicitly.', E_USER_DEPRECATED);
         return $this->publicKey;
     }
 

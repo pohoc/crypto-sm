@@ -252,9 +252,13 @@ $plaintext = Sm4::decrypt($ciphertext, $key, $options);
 $options = (new Sm4Options())->setPadding('zero');
 ```
 
-### ISO 10126 填充
+### ISO 10126 填充（已废弃）
 
-随机字节填充（除最后一个字节为填充长度），提供一定的随机性：
+随机字节填充（除最后一个字节为填充长度）。
+
+> **⚠️ 已废弃**：ISO 10126 已于 2007 年被 ISO 撤销，且随机填充字节无法在解密侧
+> 校验完整性。运行时会触发 `E_USER_DEPRECATED`，计划在未来大版本移除。
+> 新代码请使用 PKCS7 或 GCM 模式。
 
 ```php
 $options = (new Sm4Options())->setPadding('iso10126');

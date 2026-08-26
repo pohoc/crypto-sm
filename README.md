@@ -270,7 +270,7 @@ $options = (new Sm4Options())->setPadding('pkcs5');
 // 零填充（有歧义，仅用于兼容旧数据；新代码不要使用）
 $options = (new Sm4Options())->setPadding('zero');
 
-// ISO 10126 填充（随机填充字节）
+// ISO 10126 填充（已废弃：无法在解密侧校验，将在未来大版本移除）
 $options = (new Sm4Options())->setPadding('iso10126');
 
 // ANSI X9.23 填充

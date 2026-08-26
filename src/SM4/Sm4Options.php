@@ -43,7 +43,13 @@ class Sm4Options
      * WARNING: "zero" padding cannot preserve trailing null bytes in data.
      * If your data may end with \0 bytes, use "pkcs5" or "pkcs7" instead.
      *
-     * @param  string              $padding Padding mode: "pkcs5" (default), "pkcs7", "zero", "iso10126", "ansix923", or "none"
+     * Set the padding mode.
+     *
+     * Padding modes: "pkcs5" (default), "pkcs7", "zero" (deprecated, ambiguous
+     * for plaintext ending in null bytes), "iso10126" (deprecated, withdrawn by
+     * ISO 2007 and unverifiable on decryption), "ansix923", or "none"
+     *
+     * @param  string              $padding Padding mode
      * @return self
      * @throws InvalidKeyException If padding value is invalid
      */
@@ -55,6 +61,11 @@ class Sm4Options
         }
         if ($padding === 'zero') {
             @trigger_error('SM4 zero padding is ambiguous for plaintext ending in null bytes. Use pkcs5/pkcs7 or an authenticated mode such as GCM instead.', E_USER_DEPRECATED);
+        }
+        if ($padding === 'iso10126') {
+            // ISO 10126 已于 2007 年被 ISO 撤销；填充随机字节无法在解密侧校验，
+            // 计划在未来大版本移除
+            @trigger_error('SM4 ISO 10126 padding cannot be verified on decryption and has been withdrawn by ISO. Use pkcs5/pkcs7 or an authenticated mode such as GCM instead.', E_USER_DEPRECATED);
         }
         $this->padding = $padding;
         return $this;
