@@ -39,6 +39,51 @@ class Sm2 implements SignerInterface, CipherInterface
     /** @var array<string, array<int, array{x: \GMP, y: \GMP}>>|null Cached variable-base multiplication tables, keyed by point hex */
     private static ?array $windowTableCache = null;
 
+    /** @var array<string, string>|null Saved original curve params during temporary override */
+    private static ?array $savedEccTable = null;
+
+    /**
+     * Temporarily override curve parameters (for multi-curve testing).
+     *
+     * Clears all cached derived values. Call resetCurveParams() to restore.
+     * NOT intended for production use — production code should use the
+     * standard SM2 curve parameters hardcoded in this class.
+     *
+     * @param array<string, string> $params Keys: p, a, b, n, gX, gY (64-char hex)
+     */
+    public static function useCurveParams(array $params): void
+    {
+        foreach (['p', 'a', 'b', 'n', 'gX', 'gY'] as $key) {
+            if (!isset($params[$key]) || !preg_match('/^[0-9a-fA-F]{64}$/', $params[$key])) {
+                throw new \InvalidArgumentException("Missing or invalid curve parameter: {$key}");
+            }
+        }
+        if (self::$savedEccTable === null) {
+            self::$savedEccTable = self::$eccTable;
+        }
+        self::$eccTable = array_map('strtolower', $params);
+        self::clearCaches();
+    }
+
+    /**
+     * Restore the standard SM2 curve parameters after useCurveParams().
+     */
+    public static function resetCurveParams(): void
+    {
+        if (self::$savedEccTable !== null) {
+            self::$eccTable = self::$savedEccTable;
+            self::$savedEccTable = null;
+        }
+        self::clearCaches();
+    }
+
+    private static function clearCaches(): void
+    {
+        self::$gmpCache = null;
+        self::$basePointTable = null;
+        self::$windowTableCache = null;
+    }
+
     private static function gmpParam(string $key): \GMP
     {
         if (self::$gmpCache === null) {
@@ -139,6 +184,58 @@ class Sm2 implements SignerInterface, CipherInterface
         $left = gmp_mod(gmp_pow($y, 2), $p);
         $right = gmp_mod(gmp_add(gmp_add(gmp_pow($x, 3), gmp_mul($a, $x)), $b), $p);
         return gmp_cmp($left, $right) === 0;
+    }
+
+    /**
+     * Decompress a compressed SM2 public key (02/03 prefix + x coordinate).
+     *
+     * Uses the fact that p ≡ 3 (mod 4) for the SM2 curve, allowing
+     * square root via modular exponentiation: y = v^((p+1)/4) mod p.
+     *
+     * @param  string          $xHex   64-char hex x coordinate
+     * @param  int             $prefix 0x02 for even y, 0x03 for odd y
+     * @return string          128-char hex uncompressed public key (x||y)
+     * @throws CryptoException If x is invalid or no solution exists
+     */
+    public static function decompressPublicKey(string $xHex, int $prefix): string
+    {
+        if (!preg_match('/^[0-9a-fA-F]{64}$/', $xHex)) {
+            throw new CryptoException('Invalid x coordinate format for decompression');
+        }
+        if ($prefix !== 0x02 && $prefix !== 0x03) {
+            throw new CryptoException('Invalid compressed point prefix: must be 0x02 or 0x03');
+        }
+
+        $p = self::gmpParam('p');
+        $a = self::gmpParam('a');
+        $b = self::gmpParam('b');
+        $x = gmp_init(strtolower($xHex), 16);
+
+        if (gmp_cmp($x, 0) < 0 || gmp_cmp($x, $p) >= 0) {
+            throw new CryptoException('x coordinate out of range');
+        }
+
+        // y² = x³ + ax + b (mod p)
+        $alpha = gmp_mod(gmp_add(gmp_add(gmp_pow($x, 3), gmp_mul($a, $x)), $b), $p);
+
+        // Since p ≡ 3 (mod 4): y = alpha^((p+1)/4) mod p
+        $exponent = gmp_div_q(gmp_add($p, 1), 4);
+        $y = gmp_powm($alpha, $exponent, $p);
+
+        // Verify: y² should equal alpha
+        if (gmp_cmp(gmp_mod(gmp_pow($y, 2), $p), $alpha) !== 0) {
+            throw new CryptoException('Invalid x coordinate: no point exists on curve with this x');
+        }
+
+        // Select y based on parity prefix: 02 = even, 03 = odd
+        $yIsOdd = gmp_testbit($y, 0);
+        $wantOdd = ($prefix === 0x03);
+        if ($yIsOdd !== $wantOdd) {
+            $y = gmp_sub($p, $y);
+        }
+
+        return str_pad(gmp_strval($x, 16), 64, '0', STR_PAD_LEFT)
+            . str_pad(gmp_strval($y, 16), 64, '0', STR_PAD_LEFT);
     }
 
     /**

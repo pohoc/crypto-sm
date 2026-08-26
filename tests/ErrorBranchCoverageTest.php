@@ -331,18 +331,24 @@ class ErrorBranchCoverageTest extends TestCase
         Pem::importPublicKeyFromDer($mutated);
     }
 
-    public function testSpkiRejectsCompressedPointTag(): void
+    public function testSpkiAcceptsCompressedPointTag(): void
     {
-        $der = Pem::exportPublicKeyDer(Sm2::generateKeyPairHex()->getPublicKey());
-        // BIT STRING 结构固定为 03 42 00 04 || x || y
-        $needle = "\x03\x42\x00\x04";
-        $pos = strpos($der, $needle);
-        $this->assertNotFalse($pos);
-        $mutated = substr_replace($der, "\x02", $pos + 3, 1); // 04 → 02 (compressed)
+        // 构建含压缩公钥的合法 SPKI DER
+        $pub = Sm2::generateKeyPairHex()->getPublicKey();
+        $x = substr($pub, 0, 64);
+        $yHex = substr($pub, 64, 64);
+        $prefix = (gmp_testbit(gmp_init($yHex, 16), 0)) ? 0x03 : 0x02;
 
-        $this->expectException(InvalidKeyException::class);
-        $this->expectExceptionMessage('compressed EC points are not supported');
-        Pem::importPublicKeyFromDer($mutated);
+        // AlgorithmIdentifier
+        $algSeq = "\x30\x13\x06\x07\x2a\x86\x48\xce\x3d\x02\x01\x06\x08\x2a\x81\x1c\xcf\x55\x01\x82\x2d";
+        // BIT STRING: 00 (unused bits) || prefix || x (33 bytes)
+        $pointData = chr($prefix) . (string) hex2bin($x);
+        $bitString = "\x03" . chr(strlen($pointData) + 1) . "\x00" . $pointData;
+        $content = $algSeq . $bitString;
+        $spki = "\x30" . chr(strlen($content)) . $content;
+
+        $imported = Pem::importPublicKeyFromDer($spki);
+        $this->assertSame(strtolower($pub), strtolower($imported), 'compressed point must decompress to original');
     }
 
     public function testSec1ImportRejectsNonZeroUnusedBitsInPublicKeyBitString(): void
@@ -360,18 +366,35 @@ class ErrorBranchCoverageTest extends TestCase
         Pem::importPrivateKeyFromDer($mutated);
     }
 
-    public function testSec1ImportRejectsCompressedPointInPublicKeyBitString(): void
+    public function testSec1ImportAcceptsCompressedPointInPublicKeyBitString(): void
     {
-        $kp = Sm2::generateKeyPairHex();
-        $der = Pem::exportPrivateKeyDer($kp->getPrivateKey(), $kp->getPublicKey());
-        $needle = "\xa1\x44\x03\x42\x00\x04";
-        $pos = strpos($der, $needle);
-        $this->assertNotFalse($pos);
-        $mutated = substr_replace($der, "\x03", $pos + 5, 1); // 04 → 03 (compressed)
+        // 构建 SEC1 私钥 + 压缩公钥 [1]
+        $priv = str_pad('09', 64, 'ab', STR_PAD_LEFT);
+        $pub = Sm2::getPublicKey($priv);
+        $x = substr($pub, 0, 64);
+        $yHex = substr($pub, 64, 64);
+        $prefix = (gmp_testbit(gmp_init($yHex, 16), 0)) ? 0x03 : 0x02;
 
-        $this->expectException(InvalidKeyException::class);
-        $this->expectExceptionMessage('compressed EC points are not supported');
-        Pem::importPrivateKeyFromDer($mutated);
+        $version = "\x02\x01\x01";
+        $keyOctet = "\x04\x20" . (string) hex2bin($priv);
+        // 从实际导出密钥中提取 [0] 曲线段（避免硬编码 OID 字节错误）
+        $refDer = Pem::exportPrivateKeyDer($priv);
+        $a0Pos = strpos($refDer, "\xa0");
+        if ($a0Pos === false) {
+            $a0Pos = 0;
+        }
+        $refEndRaw = strpos($refDer, "\xa1", $a0Pos);
+        $refEnd = $refEndRaw !== false ? $refEndRaw : strlen($refDer);
+        $oidBytes = substr($refDer, (int) $a0Pos, (int) $refEnd - (int) $a0Pos);
+        $pointData = chr($prefix) . (string) hex2bin($x);
+        $innerBs = "\x03" . chr(strlen($pointData) + 1) . "\x00" . $pointData;
+        $pubCtx = "\xa1" . chr(strlen($innerBs)) . $innerBs;
+
+        $sec1Content = $version . $keyOctet . $oidBytes . $pubCtx;
+        $der = "\x30" . chr(strlen($sec1Content)) . $sec1Content;
+
+        $imported = Pem::importPrivateKeyFromDer($der);
+        $this->assertSame(strtolower($pub), strtolower($imported['publicKey']));
     }
 
     public function testSec1ImportRejectsMismatchedBitStringLength(): void

@@ -635,7 +635,17 @@ class Pem
         }
         $pointTag = ord($pointData[0]);
         if ($pointTag === 0x02 || $pointTag === 0x03) {
-            throw new InvalidKeyException($prefix . 'compressed EC points are not supported (expected uncompressed format starting with 0x04)');
+            // Compressed point: recover y from x and parity bit
+            if (strlen($pointData) !== 33) {
+                throw new InvalidKeyException($prefix . 'invalid compressed point length (expected 0x02/03 || x, 33 bytes)');
+            }
+            $xHex = bin2hex(substr($pointData, 1));
+            try {
+                $pubHex = Sm2::decompressPublicKey($xHex, $pointTag);
+            } catch (\CryptoSm\Exception\CryptoException $e) {
+                throw new InvalidKeyException($prefix . $e->getMessage(), 0, $e);
+            }
+            return [substr($pubHex, 0, 128), $ctxEnd];
         }
         if (strlen($pointData) !== 65 || $pointTag !== 0x04) {
             throw new InvalidKeyException($prefix . 'expected uncompressed public key (0x04 || x || y)');
@@ -813,7 +823,14 @@ class Pem
         }
         $pointTag = ord($pointData[0]);
         if ($pointTag === 0x02 || $pointTag === 0x03) {
-            throw new InvalidKeyException('Invalid public key: compressed EC points are not supported (expected uncompressed format starting with 0x04)');
+            $publicKey = Sm2::decompressPublicKey(bin2hex(substr($pointData, 1)), $pointTag);
+            if (!Sm2::isOnCurve($publicKey)) {
+                throw new InvalidKeyException('Invalid public key: decompressed point not on SM2 curve');
+            }
+            if ($offset !== $seqEnd) {
+                throw new InvalidKeyException('Invalid public key: trailing data');
+            }
+            return $publicKey;
         }
         if (strlen($pointData) !== 65 || $pointTag !== 0x04) {
             throw new InvalidKeyException('Invalid public key: expected uncompressed point (0x04 || x || y)');
@@ -828,5 +845,168 @@ class Pem
         }
 
         return $publicKey;
+    }
+
+    // ─── SM2 密文 ASN.1 格式（GM/T 0009-2012）────────────────────────────
+
+    /**
+     * Export an SM2 ciphertext in GM/T 0009 ASN.1 DER format.
+     *
+     * SM2Cipher ::= SEQUENCE {
+     *     xCoordinate  INTEGER,
+     *     yCoordinate  INTEGER,
+     *     hash         OCTET STRING SIZE(32),
+     *     cipherText   OCTET STRING
+     * }
+     *
+     * @param  string              $ciphertextHex Internal hex ciphertext (C1C3C2 or C1C2C3)
+     * @param  int                 $mode          Sm2::CIPHER_MODE_1 (C1C3C2) or Sm2::CIPHER_MODE_0 (C1C2C3)
+     * @return string              DER-encoded binary
+     * @throws InvalidKeyException If ciphertext format is invalid
+     */
+    public static function exportCiphertextAsn1(string $ciphertextHex, int $mode = Sm2::CIPHER_MODE_1): string
+    {
+        $c1Len = 128; // x||y, uncompressed point without 04 prefix
+        $hashLen = 64; // SM3 output, 32 bytes
+        if (strlen($ciphertextHex) < $c1Len + $hashLen) {
+            throw new InvalidKeyException('Ciphertext too short for SM2 format');
+        }
+        $x1 = substr($ciphertextHex, 0, 64);
+        $y1 = substr($ciphertextHex, 64, 64);
+        if ($mode === Sm2::CIPHER_MODE_0) {
+            $c2 = substr($ciphertextHex, 128, -64);
+            $c3 = substr($ciphertextHex, -64);
+        } else {
+            $c3 = substr($ciphertextHex, 128, 64);
+            $c2 = substr($ciphertextHex, 192);
+        }
+        if (!preg_match('/^[0-9a-fA-F]+$/', $x1) || !preg_match('/^[0-9a-fA-F]+$/', $y1)) {
+            throw new InvalidKeyException('Ciphertext C1 is not valid hex');
+        }
+
+        // Strip leading zero bytes from coordinates for DER INTEGER encoding,
+        // but preserve at least one byte and add a leading 0x00 when high bit is set
+        $x1Int = ltrim($x1, '0');
+        if ($x1Int === '') {
+            $x1Int = '00';
+        } elseif (strlen($x1Int) % 2 !== 0) {
+            $x1Int = '0' . $x1Int;
+        }
+        $x1Bytes = (string) hex2bin($x1Int);
+        if (ord($x1Bytes[0]) >= 0x80) {
+            $x1Bytes = "\x00" . $x1Bytes;
+        }
+
+        $y1Int = ltrim($y1, '0');
+        if ($y1Int === '') {
+            $y1Int = '00';
+        } elseif (strlen($y1Int) % 2 !== 0) {
+            $y1Int = '0' . $y1Int;
+        }
+        $y1Bytes = (string) hex2bin($y1Int);
+        if (ord($y1Bytes[0]) >= 0x80) {
+            $y1Bytes = "\x00" . $y1Bytes;
+        }
+
+        $c3Bin = (string) hex2bin($c3);
+        $c2Bin = (string) hex2bin($c2);
+
+        // Build TLV elements
+        $intX = "\x02" . self::encodeDerLength(strlen($x1Bytes)) . $x1Bytes;
+        $intY = "\x02" . self::encodeDerLength(strlen($y1Bytes)) . $y1Bytes;
+        $octHash = "\x04" . self::encodeDerLength(strlen($c3Bin)) . $c3Bin;
+        $octCipher = "\x04" . self::encodeDerLength(strlen($c2Bin)) . $c2Bin;
+
+        $content = $intX . $intY . $octHash . $octCipher;
+        return "\x30" . self::encodeDerLength(strlen($content)) . $content;
+    }
+
+    /**
+     * Import an SM2 ciphertext from GM/T 0009 ASN.1 DER format.
+     *
+     * @param  string              $der  DER-encoded SM2Cipher
+     * @param  int                 $mode Target internal mode: Sm2::CIPHER_MODE_1 or Sm2::CIPHER_MODE_0
+     * @return string              Internal hex ciphertext in the requested mode
+     * @throws InvalidKeyException If the DER structure is invalid
+     */
+    public static function importCiphertextAsn1(string $der, int $mode = Sm2::CIPHER_MODE_1): string
+    {
+        $offset = 0;
+        if ($offset >= strlen($der) || ord($der[$offset]) !== 0x30) {
+            throw new InvalidKeyException('Invalid SM2 cipher ASN.1: expected SEQUENCE');
+        }
+        $offset++;
+        [$seqLen, $offset] = self::parseDerLength($der, $offset);
+        $seqEnd = $offset + $seqLen;
+        if ($seqEnd !== strlen($der)) {
+            throw new InvalidKeyException('Invalid SM2 cipher ASN.1: trailing data');
+        }
+
+        // Parse x1 INTEGER
+        if ($offset >= strlen($der) || ord($der[$offset]) !== 0x02) {
+            throw new InvalidKeyException('Invalid SM2 cipher ASN.1: expected x INTEGER');
+        }
+        $offset++;
+        [$xLen, $offset] = self::parseDerLength($der, $offset);
+        if ($offset + $xLen > $seqEnd || $xLen < 1 || $xLen > 33) {
+            throw new InvalidKeyException('Invalid SM2 cipher ASN.1: invalid x length');
+        }
+        $x1Bin = substr($der, $offset, $xLen);
+        $offset += $xLen;
+
+        // Parse y1 INTEGER
+        if ($offset >= strlen($der) || ord($der[$offset]) !== 0x02) {
+            throw new InvalidKeyException('Invalid SM2 cipher ASN.1: expected y INTEGER');
+        }
+        $offset++;
+        [$yLen, $offset] = self::parseDerLength($der, $offset);
+        if ($offset + $yLen > $seqEnd || $yLen < 1 || $yLen > 33) {
+            throw new InvalidKeyException('Invalid SM2 cipher ASN.1: invalid y length');
+        }
+        $y1Bin = substr($der, $offset, $yLen);
+        $offset += $yLen;
+
+        // Parse hash OCTET STRING
+        if ($offset >= strlen($der) || ord($der[$offset]) !== 0x04) {
+            throw new InvalidKeyException('Invalid SM2 cipher ASN.1: expected hash OCTET STRING');
+        }
+        $offset++;
+        [$hLen, $offset] = self::parseDerLength($der, $offset);
+        if ($hLen !== 32) {
+            throw new InvalidKeyException('Invalid SM2 cipher ASN.1: hash must be 32 bytes');
+        }
+        $c3Bin = substr($der, $offset, $hLen);
+        $offset += $hLen;
+
+        // Parse cipherText OCTET STRING
+        if ($offset >= strlen($der) || ord($der[$offset]) !== 0x04) {
+            throw new InvalidKeyException('Invalid SM2 cipher ASN.1: expected cipherText OCTET STRING');
+        }
+        $offset++;
+        [$ctLen, $offset] = self::parseDerLength($der, $offset);
+        if ($offset + $ctLen !== $seqEnd) {
+            throw new InvalidKeyException('Invalid SM2 cipher ASN.1: cipherText length mismatch');
+        }
+        $c2Bin = substr($der, $offset, $ctLen);
+
+        // Reconstruct coordinates as fixed-width 32-byte big-endian.
+        // DER INTEGER may include a leading 0x00 sign-bit pad (making it 33 bytes),
+        // so always take the last 32 bytes and left-pad with zeros.
+        $x1 = str_pad(substr(bin2hex($x1Bin), -64), 64, '0', STR_PAD_LEFT);
+        $y1 = str_pad(substr(bin2hex($y1Bin), -64), 64, '0', STR_PAD_LEFT);
+
+        // Validate point on curve
+        $c1 = strtolower($x1 . $y1);
+        if (!Sm2::isOnCurve($c1)) {
+            throw new InvalidKeyException('Invalid SM2 cipher ASN.1: C1 point not on curve');
+        }
+
+        $c3 = bin2hex($c3Bin);
+        $c2 = bin2hex($c2Bin);
+
+        if ($mode === Sm2::CIPHER_MODE_0) {
+            return strtolower($c1 . $c2 . $c3);
+        }
+        return strtolower($c1 . $c3 . $c2);
     }
 }
