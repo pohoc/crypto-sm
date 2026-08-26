@@ -1,0 +1,22 @@
+{
+    // 变异测试配置：验证测试对密码学关键路径的"杀灭"有效性
+    //
+    // 运行方式（Infection 要求 PHP 8.1+ 且需要 Xdebug/phpdbg，故不进入
+    // require-dev 以免影响 PHP 8.0 CI 矩阵；按需在本地安装）：
+    //
+    //   composer global require infection/infection
+    //   XDEBUG_MODE=coverage infection --threads=8 --show-mutations
+    //
+    "$schema": "http://raw.githubusercontent.com/infection/infection/master/resources/schema.json",
+    "source": {
+        "directories": ["src"]
+    },
+    "timeout": 30,
+    "logs": {
+        "text": "build/infection.log",
+        "summary": "build/infection-summary.log"
+    },
+    "mutators": {
+        "@default": true
+    }
+}

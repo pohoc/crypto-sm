@@ -183,15 +183,13 @@ $options = (new Sm4Options())
 
 #### GCM 预热
 
-GCM 首次调用时需要构建查表（约 1.7ms），可通过预热消除此延迟：
+`Sm4::warmupGcm($key)` / `Gcm::warmup()` 保留为兼容 API。当前实现无建表开销，
+预热不再是必需的优化手段：
 
 ```php
 use CryptoSm\SM4\Sm4;
 
-// 在应用启动时预热（可选）
-Sm4::warmupGcm($key);
-
-// 后续 GCM 操作无建表延迟
+Sm4::warmupGcm($key); // 可选；无实际副作用
 $ciphertext = Sm4::encrypt($data, $key, $options);
 ```
 
@@ -392,7 +390,8 @@ try {
 - **轮数**: 32 轮
 - **标准**: GM/T 0002-2012
 - **GCM 实现**: 优先使用 OpenSSL SM4-ECB 做块加密；不可用时使用纯 PHP SM4 block fallback；CTR/GHASH 由本库 `Gcm` 类实现
-- **GCM GHASH**: 使用 8-bit 查表法 + 16 层移位表 + reduction table 优化
+- **GCM GHASH**: GF(2^128) 乘法采用 NIST SP 800-38D Algorithm 1 的规范直译实现；
+  正确性由 RFC 8998 官方向量与独立参考模型差分测试（GcmReferenceModelTest）双重锚定
 - **GcmPure**: 已废弃别名，继承自 `Gcm`，将在未来版本移除
 
 ## 安全注意事项
