@@ -5,8 +5,8 @@
 SM3 是中国密码杂凑算法标准 (GM/T 0004-2012)，产生 256 位的哈希值。
 
 本实现特性：
-- **OpenSSL 加速**：自动检测 `openssl_digest('sm3')`，可用时使用 C 原生实现（比纯 PHP 快 100-300 倍）
-- **纯 PHP 回退**：当 OpenSSL 不支持 SM3 时自动回退
+- **OpenSSL 加速**：自动检测 `hash_algos()` 中的 `sm3`（PHP ≥7.4 且链接 OpenSSL 1.1.1+ 时可用），可用时使用 C 原生实现（比纯 PHP 快约两个数量级以上）
+- **纯 PHP 回退**：当 PHP 的 hash 扩展不支持 SM3 时自动回退
 - **流式哈希**：支持分块更新，适用于大文件等场景
 - **HMAC-SM3**：RFC 2104 标准的 HMAC 实现
 
@@ -200,7 +200,7 @@ echo "  流式   => " . $hmac->finalize() . "\n";
 - **分组大小**: 512 位（64 字节）
 - **算法结构**: Merkle-Damgård 结构
 - **标准**: GM/T 0004-2012、ISO/IEC 10118-3:2018
-- **OpenSSL 加速**: 自动检测 `openssl_digest('sm3')`，PHP 8.1+ / OpenSSL 1.1.1+ 支持
+- **OpenSSL 加速**: 通过 `in_array('sm3', hash_algos(), true)` 检测（PHP 7.4+ 且链接 OpenSSL 1.1.1+ 时可用）；流式路径使用 `hash_init('sm3')` 增量上下文
 - **流式哈希性能**: 原生 SM3 可用时使用增量 hash context，避免累积完整输入；OpenSSL 不支持 SM3 时使用纯 PHP 分块回退
 
 ## 安全注意事项

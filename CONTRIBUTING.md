@@ -37,7 +37,7 @@ vendor/bin/php-cs-fixer fix
 
 ## Static Analysis
 
-This project uses [PHPStan](https://phpstan.org/) at **level 8** (maximum strictness).
+This project uses [PHPStan](https://phpstan.org/) at **level 9** (maximum strictness).
 
 ```bash
 vendor/bin/phpstan analyse
@@ -65,10 +65,12 @@ This runs: `cs-check` → `analyse` → `test`
 ### PR Requirements
 
 - [ ] All tests pass (`vendor/bin/phpunit`)
-- [ ] PHPStan level 8 passes (`vendor/bin/phpstan analyse`)
+- [ ] PHPStan level 9 passes (`vendor/bin/phpstan analyse`)
 - [ ] Code style is consistent (`vendor/bin/php-cs-fixer fix --dry-run --diff`)
 - [ ] New public methods have PHPDoc documentation
 - [ ] New features include test cases
+- [ ] Crypto-core changes (GCM/GHASH, ASN.1/PEM, EC arithmetic) keep `tests/GcmReferenceModelTest.php`
+      and `tests/FuzzTest.php` green, and add official vectors when touching a standard implementation
 
 ## Coding Standards
 

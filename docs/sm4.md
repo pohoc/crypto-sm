@@ -10,7 +10,7 @@ SM4 是中国分组密码算法标准 (GM/T 0002-2012)，是一种 128 位分组
 - **OpenSSL 加速**：ECB/CBC/CFB/OFB/CTR 优先使用 OpenSSL C 原生实现
 - **纯 PHP 回退**：OpenSSL 不支持 SM4 时，ECB/CBC/CFB/OFB/CTR/GCM 自动使用纯 PHP SM4 block fallback
 - **GCM 后端**：优先使用 OpenSSL SM4-ECB 做块加密，并由 `Gcm` 实现 CTR/GHASH（`GcmPure` 已废弃别名）
-- **GCM 预热**：`Sm4::warmupGcm($key)` 可消除首次调用建表延迟
+- **GCM 预热**：`Sm4::warmupGcm($key)` 为兼容 API；当前实现无建表开销，无需预热
 
 ## 实现与性能预期
 

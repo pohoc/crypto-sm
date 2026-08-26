@@ -106,6 +106,10 @@ $options = (new SignatureOptions())
 $signature = Sm2::doSignature($message, $privateKey, $options);
 ```
 
+> **长度限制（GM/T 0003-2012 附录 A）**：ENTL 是固定 16 位字段，用户 ID 的
+> 位长不得超过 0xFFFF，即**最长 8191 字节**。超长 ID 会抛出 `CryptoException`
+> 而非静默截断——否则 Z 值结构与其它国密实现不兼容。
+
 ### DER 格式签名
 
 SM2 支持 DER 编码的签名格式，验签时自动检测 RS 拼接或 DER 格式：
@@ -224,6 +228,29 @@ $sharedKeyB = KeyExchange::responderComputeKey(
 );
 
 // $sharedKeyA === $sharedKeyB
+```
+
+> **klen 取值范围**：1 字节 ≤ klen ≤ `KeyExchange::MAX_KLEN`（1 MiB）。
+> 超出范围抛出 `InvalidKeyException`（上界为防滥用保护，远超合法用途）。
+
+### 密钥确认便捷方法
+
+除上述分步 API 外，还提供一步到位的确认变体：
+
+```php
+use CryptoSm\SM2\KeyExchange;
+
+// 发起方：计算共享密钥 + S1（响应方应验证 S1）
+$resultA = KeyExchange::initiatorComputeKeyWithConfirmation(
+    $dA, $rA, $PB, $RB, $klen, $ida, $idb
+);
+// 返回 ['key' => ..., 'xV' => ..., 'yV' => ..., 's1' => ...]
+
+// 响应方：计算共享密钥 + S2（发起方应验证 S2）
+$resultB = KeyExchange::responderComputeKeyWithConfirmation(
+    $dB, $rB, $PA, $RA, $klen, $ida, $idb
+);
+// 返回 ['key' => ..., 'xV' => ..., 'yV' => ..., 's2' => ...]
 ```
 
 ### 密钥确认
@@ -410,3 +437,5 @@ try {
 4. 签名：128 个十六进制字符 (r||s) 或 DER 格式
 5. PEM 格式支持 SEC 1、PKCS#8（私钥）和 SubjectPublicKeyInfo（公钥）
 6. 密钥交换双方必须使用相同的用户 ID 和密钥长度参数
+7. 签名用户 ID 最长 8191 字节（ENTL 为 16 位字段，超长直接拒绝）
+8. PEM 导入要求 BEGIN/END 标签成对匹配；SEC1/PKCS#8 均拒绝压缩点（0x02/0x03 开头）

@@ -41,6 +41,9 @@ Instead, please report them via email to: **po.hoc4@gmail.com**
 - **PEM import** validates OID (1.2.156.10197.1.301), DER canonical length forms, public-key curve membership, and private/public key consistency
 - Always use cryptographically secure random numbers for key generation (`gmp_random_range`, `random_bytes`)
 - **SM4-GCM** IV must never be reused with the same key
+- **SM4-GCM** IV reuse is detected at runtime and rejected by default (`enableGcmIvTracking(false)` opts out); the tracking table is process-local best-effort — always generate a fresh IV per encryption (the default) or use `encryptPayload()`
+- **SM4 decryption** with explicit `Sm4Options` requires the IV to be set; a missing IV throws `InvalidKeyException` instead of silently generating a random one (which would yield garbage plaintext)
+- **SM4-GCM GHASH** correctness is anchored to RFC 8998 A.1 official vectors plus an independent NIST SP 800-38D reference-model differential test (`tests/GcmReferenceModelTest.php`)
 
 ## Side-Channel Boundary
 

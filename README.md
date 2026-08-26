@@ -259,9 +259,6 @@ $plaintext = Sm4::decrypt($ciphertext, $key, $options);
 // 自包含 payload API（推荐用于业务封装，自动携带 IV/tag 元数据）
 $payload = Sm4::encryptPayload($data, $key, (new Sm4Options())->setMode(Sm4::MODE_GCM));
 $plaintext = Sm4::decryptPayload($payload, $key);
-
-// GCM 预热（消除首次调用建表延迟，可选）
-Sm4::warmupGcm($key);
 ```
 
 #### SM4 填充模式
@@ -341,96 +338,79 @@ $plaintext = SmCrypto::sm4Decrypt($ciphertext, $key, $options);
 
 - **零运行时依赖** — 仅需 `ext-gmp` 和 `ext-openssl`
 - **OpenSSL 加速** — SM3 和 SM4（CBC/ECB/CFB/OFB/CTR）优先使用 OpenSSL 原生实现；OpenSSL 不支持 SM4 时自动回退到纯 PHP
-- **标准合规** — 全部通过 GM/T 0002/0003/0004 标准测试向量验证（600+ 测试，1,000,000+ 断言）
+- **标准合规** — 通过 GM/T 0002/0003/0004 标准测试向量与 RFC 8998 SM4-GCM 官方向量验证（720+ 测试，1,000,000+ 断言）
 - **安全** — GCM 认证标签时序安全比较、GCM IV 重用检测（默认开启）、解密缺 IV 显式报错、DER 签名自动检测、安全随机数生成、SM2 签名 60000+ 次零失败验证
-- **优雅 API** — 门面 + 子系统双层 API，选项对象链式调用，GCM warmup 预热接口
+- **正确性锚定** — GCM 另有 NIST SP 800-38D 规范直译参考模型差分测试（GcmReferenceModelTest）与解析器模糊测试（FuzzTest）
+- **优雅 API** — 门面 + 子系统双层 API，选项对象链式调用
 
 ## 性能基准
 
-> 测试环境：PHP 8.4.4 / macOS / OpenSSL 3.4.1 / Apple M 系列  
-> 运行方式：`php scripts/benchmark.php`
-> 基线阈值：`scripts/benchmark-baseline.json`
+> 运行方式：`php scripts/benchmark.php`  
+> 基线阈值：[scripts/benchmark-baseline.json](scripts/benchmark-baseline.json)
 
-### SM3 哈希
+性能高度依赖运行环境的国密加速能力，请先确认后端再对照数据：
 
-| 数据大小 | 平均耗时 | P50 | 吞吐量 |
-|----------|----------|-----|--------|
-| 16 B | ~0.7 μs | 0.6 μs | ~22 MB/s |
-| 256 B | ~1.1 μs | 1.1 μs | ~220 MB/s |
-| 1 KB | ~2.6 μs | 2.5 μs | ~370 MB/s |
-| 4 KB | ~9 μs | 8.2 μs | ~430 MB/s |
+```php
+var_dump(in_array('sm3', hash_algos(), true));                    // SM3 原生加速
+var_dump(in_array('SM4-ECB', openssl_get_cipher_methods(), true)); // SM4 原生加速
+```
 
-> SM3 使用 OpenSSL `sm3` 原生实现加速，吞吐量随数据增大趋近 ~400 MB/s。
+基准脚本会自动探测并如实标注后端；基线阈值仅在所需后端可用时参与比较
+（缺失时标记 `SKIP` 而非 `WARN`）。
 
-### HMAC-SM3
+### 环境 A：OpenSSL 原生国密加速（参考值）
 
-| 数据大小 | 平均耗时 | 吞吐量 |
-|----------|----------|--------|
-| 256 B | ~2.5 μs | ~100 MB/s |
-| 1 KB | ~4 μs | ~240 MB/s |
-| 4 KB | ~10 μs | ~380 MB/s |
-
-### SM4 对称加密
+要求 `hash_algos()` 含 `sm3` 且 OpenSSL 含 `SM4-ECB`（常见于链接 OpenSSL 1.1.1+/3.x 的 Linux 发行版 PHP）。
+下表为该类环境的历史参考量级：
 
 | 操作 | 数据大小 | 平均耗时 | 吞吐量 |
 |------|----------|----------|--------|
-| ECB 加密 | 1 KB | ~7.5 μs | ~130 MB/s |
-| CBC 加密 | 1 KB | ~8.8 μs | ~110 MB/s |
-| CBC 解密 | 1 KB | ~10 μs | ~93 MB/s |
-| CFB 加密 | 1 KB | ~8.5 μs | ~115 MB/s |
-| OFB 加密 | 1 KB | ~8.5 μs | ~115 MB/s |
-| CTR 加密 | 1 KB | ~8.5 μs | ~115 MB/s |
-| GCM 加密 | 1 KB | ~240 μs | ~4 MB/s |
-| GCM 解密 | 1 KB | ~250 μs | ~4 MB/s |
+| SM3 哈希 | 4 KB | ~9 μs | ~430 MB/s |
+| SM4 CBC 加密 | 1 KB | ~8.8 μs | ~110 MB/s |
+| SM2 签名 | 16 B | ~1.1 ms | — |
 
-> \* GCM 路径优先使用 OpenSSL SM4-ECB 做块加密；不可用时使用纯 PHP SM4 block fallback。CTR/GHASH 由本库实现，首次调用含建表开销（~1.7ms），可通过 `Sm4::warmupGcm($key)` 预热消除。
+### 环境 B：纯 PHP 回退（Apple M 系列 / PHP 8.4.4 实测）
 
-### 性能基线
+无任何原生国密支持时的实测数据（负载 ~4 的 macOS 开发机，2026-08）：
 
-脚本内置一组核心指标阈值，用于识别明显性能退化：
+**SM3 / HMAC-SM3**
 
-- `SM3 哈希 (4096B)`
-- `HMAC-SM3 (4096B)`
-- `SM4-CBC 加密 (1024B)`
-- `SM4-GCM 加密 (1024B)`
-- `SM2 签名 (16B)`
+| 操作 | 16 B | 1 KB | 4 KB |
+|------|------|------|------|
+| SM3 哈希 | ~192 μs | ~3.2 ms | ~12.6 ms (~320 KB/s) |
+| HMAC-SM3 | ~0.77 ms | ~4.1 ms | ~13.0 ms |
 
-基线文件位于 [scripts/benchmark-baseline.json](/Users/pohoc/code/next/crypto-sm/scripts/benchmark-baseline.json)。当平均耗时超过阈值时，脚本会输出 `WARN`。
+**SM4 对称加密（1 KB）**
 
-### SM4 模式吞吐量对比（1 KB 数据）
+| 模式 | 平均耗时 | 吞吐量 |
+|------|----------|--------|
+| ECB | ~2.2 ms | ~450 KB/s |
+| CBC 加密 / 解密 | ~2.2 ms / ~2.1 ms | ~430 KB/s |
+| CFB / OFB / CTR | ~2.2 ms | ~450 KB/s |
+| **GCM 加密 / 解密** | ~6.1 ms / ~6.6 ms | ~165 KB/s |
 
-```
-ECB  ████████████████████████████████████████  ~130 MB/s
-CBC  ████████████████████████████████████      ~110 MB/s
-CFB  █████████████████████████████████████     ~115 MB/s
-OFB  █████████████████████████████████████     ~115 MB/s
-CTR  █████████████████████████████████████     ~115 MB/s
-GCM  █                                         ~4 MB/s (纯PHP, 8-bit查表)
-```
+> GCM 的 GHASH 为 GF(2^128) 规范直译实现（正确性优先，经 RFC 8998 向量验证），
+> 显著慢于其它模式属预期；吞吐敏感场景请优先确认 OpenSSL 原生后端可用。
 
-### SM2 非对称操作
-
-| 操作 | 数据大小 | 平均耗时 |
-|------|----------|----------|
-| 密钥生成 | - | ~1.2 ms |
-| 签名 | 16 B | ~1.1 ms |
-| 签名 | 1 KB | ~1.1 ms |
-| 验签 | 16 B | ~2.3 ms |
-| 加密 | 64 B | ~2.3 ms |
-| 解密 | 64 B | ~1.2 ms |
-| 密钥交换（完整流程） | 32 B | ~11.5 ms |
-
-### SM2 PEM 导入/导出
+**SM2 非对称操作**
 
 | 操作 | 平均耗时 |
 |------|----------|
-| SEC1 私钥导出 | ~2.5 μs |
-| PKCS#8 私钥导出 | ~3.5 μs |
-| 公钥导出 | ~3.5 μs |
-| 私钥导入 | ~1.1 ms |
-| 公钥导入 | ~2.7 μs |
+| 密钥生成 | ~1.5 ms |
+| 签名 / 验签 (16 B) | ~1.9 ms / ~3.2 ms |
+| 加密 / 解密 (64 B) | ~4.5 ms / ~2.9 ms |
+| 密钥交换（完整流程，32 B） | ~23.5 ms |
 
-> 私钥导入耗时较高是因为需要验证密钥范围并推导公钥（椭圆曲线点乘运算）。
+**PEM 导入/导出**：导出 ~10–27 μs；私钥导入 ~1.6–3.2 ms（含曲线点乘推导公钥）；公钥导入 ~21 μs。
+
+### 性能基线
+
+脚本内置核心指标阈值用于识别性能退化：`SM3 哈希 (4096B)`、`HMAC-SM3 (4096B)`、
+`SM4-CBC 加密 (1024B)`、`SM4-GCM 加密 (1024B)`、`SM2 签名 (16B)`。
+
+- 后端可用且超阈值 → `WARN`
+- 所需后端缺失 → `SKIP`（回退环境下比较无意义）
+- 达标 → `PASS`
 
 ### 运行基准测试
 
@@ -445,7 +425,7 @@ composer install
 vendor/bin/phpunit
 ```
 
-600+ 测试，1,000,000+ 断言，覆盖全部标准测试向量。
+720+ 测试，1,000,000+ 断言，覆盖全部标准测试向量。
 
 ## 代码质量
 
