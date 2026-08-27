@@ -323,7 +323,7 @@ class KeyExchange
         // For responder: sB = (h * dB + x̄B * rB) mod n
         $s = gmp_mod(gmp_add(gmp_mul($h, $dGmp), gmp_mul($xBarSelf, $rGmp)), $n);
 
-// [不可达守卫] 触发概率 ~2^-256
+        // [不可达守卫] 触发概率 ~2^-256
         if (gmp_cmp($s, 0) === 0) {
             throw new CryptoException('SM2 key exchange failed: s = 0');
         }
@@ -334,7 +334,7 @@ class KeyExchange
         // Responder: V = (h * sB) * (PA + x̄A * RA)
         $scaledOtherEphem = Sm2::pointMultiplyPublic($R_other, gmp_strval($xBarOther, 16));
         $sum = Sm2::pointAddPublic($P_other, $scaledOtherEphem);
-// [不可达守卫] 素数阶群内互逆相加仅得无穷远
+        // [不可达守卫] 素数阶群内互逆相加仅得无穷远
         if ($sum === null) {
             throw new CryptoException('SM2 key exchange: point addition failed');
         }
@@ -377,7 +377,7 @@ class KeyExchange
         $key = '';
         $maxCt = 0xFFFFFFFF;
         while (strlen($key) < $klen) {
-// [不可达守卫] klen 受 MAX_KLEN 约束
+            // [不可达守卫] klen 受 MAX_KLEN 约束
             if ($ct > $maxCt) {
                 throw new CryptoException('KDF counter overflow');
             }
