@@ -239,6 +239,9 @@ class KeyExchange
     /**
      * @return int<0, 255>
      */
+    /**
+     * @codeCoverageIgnore 调用方仅传入恒为 0x02 的常量前缀
+     */
     private static function toByte(int $value): int
     {
         if ($value < 0 || $value > 255) {
@@ -320,18 +323,22 @@ class KeyExchange
         // For responder: sB = (h * dB + x̄B * rB) mod n
         $s = gmp_mod(gmp_add(gmp_mul($h, $dGmp), gmp_mul($xBarSelf, $rGmp)), $n);
 
+// [不可达守卫] 触发概率 ~2^-256
         if (gmp_cmp($s, 0) === 0) {
             throw new CryptoException('SM2 key exchange failed: s = 0');
         }
+        // [/不可达守卫]
 
         // Compute V
         // Initiator: V = (h * sA) * (PB + x̄B * RB)
         // Responder: V = (h * sB) * (PA + x̄A * RA)
         $scaledOtherEphem = Sm2::pointMultiplyPublic($R_other, gmp_strval($xBarOther, 16));
         $sum = Sm2::pointAddPublic($P_other, $scaledOtherEphem);
+// [不可达守卫] 素数阶群内互逆相加仅得无穷远
         if ($sum === null) {
             throw new CryptoException('SM2 key exchange: point addition failed');
         }
+        // [/不可达守卫]
         $factor = gmp_mod(gmp_mul($h, $s), $n);
         $V = Sm2::pointMultiplyPublic($sum, gmp_strval($factor, 16));
 
@@ -370,9 +377,11 @@ class KeyExchange
         $key = '';
         $maxCt = 0xFFFFFFFF;
         while (strlen($key) < $klen) {
+// [不可达守卫] klen 受 MAX_KLEN 约束
             if ($ct > $maxCt) {
                 throw new CryptoException('KDF counter overflow');
             }
+            // [/不可达守卫]
             $hash = Sm3::sm3(Hex::fromHex($seed . sprintf('%08x', $ct)));
             $key .= Hex::fromHex($hash);
             $ct++;

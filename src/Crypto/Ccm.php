@@ -81,23 +81,15 @@ final class Ccm
      */
     public function decrypt(string $ciphertext, string $tag, string $nonce, string $aad = '', int $tagLength = 16): string
     {
-        self::validateParams($nonce, $tagLength, strlen($aad), strlen($ciphertext));
         if (strlen($tag) !== $tagLength) {
             throw new CryptoException('SM4-CCM: tag length mismatch');
         }
+        self::validateParams($nonce, $tagLength, strlen($aad), strlen($ciphertext));
 
         $q = 15 - strlen($nonce);
         $a0 = $this->buildCounterBlock(false, $nonce, $q, 0);
-        $decryptedTag = substr((string) hex2bin(bin2hex($tag)) ^ substr($this->blockEncrypt($a0), 0, $tagLength) ?: '', 0, $tagLength);
-        if ($decryptedTag === '') {
-            // XOR fallback for edge cases
-            $tagBytes = str_split($tag, 1);
-            $mask = substr($this->blockEncrypt($a0), 0, $tagLength);
-            $decryptedTag = '';
-            foreach ($tagBytes as $j => $tb) {
-                $decryptedTag .= chr(ord($tb) ^ ord($mask[$j]));
-            }
-        }
+        $mask = substr($this->blockEncrypt($a0), 0, $tagLength);
+        $decryptedTag = $tag ^ $mask;
 
         $ctrStart = $this->buildCounterBlock(false, $nonce, $q, 1);
         $keystream = $this->ctrKeystream($ciphertext, $ctrStart);
@@ -127,12 +119,17 @@ final class Ccm
             throw new CryptoException('SM4-CCM invalid tag length (must be one of 4,6,8,10,12,14,16)');
         }
         $q = 15 - strlen($nonce);
-        if ($dataLen >= (1 << ($q * 8))) {
+        // q*8 可达 64 位，PHP int 在 64 位系统上最大 shift 为 62
+        $maxShift = min($q * 8, PHP_INT_SIZE * 8 - 2);
+        if ($dataLen >= (1 << $maxShift)) {
             throw new CryptoException('SM4-CCM message too long for nonce size');
         }
-        if ($aadLen >= (1 << 16)) {
-            throw new CryptoException('SM4-CCM AAD must be less than 65536 bytes');
+        // RFC 3610：AAD 长度上限受限于 4 字节扩展前缀编码容量
+        // [不可达守卫] 硬上限超出任何实际内存可构造输入
+        if ($aadLen >= (1 << 32)) {
+            throw new CryptoException('SM4-CCM AAD exceeds supported maximum');
         }
+        // [/不可达守卫]
     }
 
     private static function formatFlags(int $tagLength, bool $hasAad, int $q): int

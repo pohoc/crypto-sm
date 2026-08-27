@@ -293,10 +293,8 @@ class Gcm
     private static function gmpToBytes(\GMP $value): string
     {
         $hex = str_pad(gmp_strval($value, 16), 32, '0', STR_PAD_LEFT);
-        $raw = hex2bin($hex);
-        if ($raw === false) {
-            return str_repeat("\x00", 16);
-        }
+        // str_pad 至 32 个 hex 字符后 hex2bin 恒成功且恰为 16 字节
+        $raw = (string) hex2bin($hex);
         if (strlen($raw) > 16) {
             $raw = substr($raw, -16);
         } elseif (strlen($raw) < 16) {

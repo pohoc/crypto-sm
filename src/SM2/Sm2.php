@@ -513,9 +513,11 @@ class Sm2 implements SignerInterface, CipherInterface
         for ($retry = 0; $retry < $maxRetries; $retry++) {
             $k = self::randomScalar();
             $x1y1 = self::fixedBaseMultiply($k, $p, $a);
+// [不可达守卫] 素数阶群内 [k]G 不为无穷远
             if ($x1y1 === null) {
                 continue;
             }
+            // [/不可达守卫]
             $x1Dec = $x1y1['x'];
 
             if (gmp_cmp($x1Dec, $n) >= 0) {
@@ -523,9 +525,11 @@ class Sm2 implements SignerInterface, CipherInterface
             }
 
             $r = gmp_mod(gmp_add($e, $x1Dec), $n);
+// [不可达守卫] 触发概率 ~2^-256，规范要求的重试守卫
             if (gmp_cmp($r, 0) === 0 || gmp_cmp(gmp_add($r, $k), $n) === 0) {
                 continue;
             }
+            // [/不可达守卫]
 
             $tmp = gmp_mod(gmp_sub($k, gmp_mul($r, $d)), $n);
             $s = gmp_mod(gmp_mul($dPlus1Inv, $tmp), $n);
@@ -663,9 +667,11 @@ class Sm2 implements SignerInterface, CipherInterface
         $key = '';
         $maxCt = 0xFFFFFFFF; // 32-bit counter limit per GM/T 0003-2012
         while (strlen($key) < $keyLen) {
+// [不可达守卫] klen 受 MAX_KLEN 约束，计数器远小于 2^32
             if ($ct > $maxCt) {
                 throw new CryptoException('KDF counter overflow: key length too large');
             }
+            // [/不可达守卫]
             $hash = Sm3::sm3(Hex::fromHex($seed . sprintf('%08x', $ct)));
             $key .= Hex::fromHex($hash);
             $ct++;

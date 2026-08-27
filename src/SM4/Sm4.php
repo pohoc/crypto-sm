@@ -264,6 +264,7 @@ class Sm4 implements CipherInterface
     /**
      * Encrypt/decrypt using OpenSSL.
      */
+    /** 平台分支：需要原生 OpenSSL SM4-ECB；不可用时走纯 PHP 回退。 */
     private static function cryptOpenSsl(string $data, string $keyBin, bool $encrypt, string $mode, string $padding, Sm4Options $options): string
     {
         $opensslCipher = self::getOpenSSLMethodName($mode);

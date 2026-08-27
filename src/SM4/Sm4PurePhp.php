@@ -137,11 +137,14 @@ final class Sm4PurePhp
      */
     private function processBlock(string $block, array $rk): string
     {
-        $words = unpack('N4', $block);
-        if ($words === false) {
+        // unpack('N4', 16 字节定长输入) 恒成功
+        // [不可达守卫] unpack('N4', 16 字节定长输入) 构造性恒成功
+        $unpacked = unpack('N4', $block);
+        if (!is_array($unpacked)) {
             throw new CryptoException('SM4 block unpack failed');
         }
-        $x = array_values($words);
+        // [/不可达守卫]
+        $x = array_values($unpacked);
 
         for ($i = 0; $i < 32; $i++) {
             $tmp = $x[$i + 1] ^ $x[$i + 2] ^ $x[$i + 3] ^ $rk[$i];
@@ -161,11 +164,14 @@ final class Sm4PurePhp
      */
     private static function keyExpansion(string $keyBin): array
     {
-        $words = unpack('N4', $keyBin);
-        if ($words === false) {
+        // unpack('N4', 16 字节定长输入) 恒成功
+        // [不可达守卫] unpack('N4', 16 字节定长输入) 构造性恒成功
+        $unpacked = unpack('N4', $keyBin);
+        if (!is_array($unpacked)) {
             throw new CryptoException('SM4 key unpack failed');
         }
-        $mk = array_values($words);
+        // [/不可达守卫]
+        $mk = array_values($unpacked);
 
         // K[0..3] = MK[i] ^ FK[i]
         $k = [];

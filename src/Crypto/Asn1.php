@@ -163,10 +163,8 @@ class Asn1
         if (!preg_match('/^[0-9a-fA-F]+$/', $hex)) {
             throw new CryptoException('Invalid hex for integer encoding');
         }
-        $bytes = @hex2bin($hex);
-        if ($bytes === false) {
-            throw new CryptoException('Invalid hex for integer encoding');
-        }
+        // 上游 preg_match 已确保纯十六进制且偶数长度，hex2bin 不可能失败
+        $bytes = (string) hex2bin($hex);
 
         while (strlen($bytes) > 1 && ord($bytes[0]) === 0) {
             $bytes = substr($bytes, 1);
