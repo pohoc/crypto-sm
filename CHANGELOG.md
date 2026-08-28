@@ -2,6 +2,29 @@
 
 本文件由脚本自动生成，基于 git tag 和 commit 记录。
 
+## [v0.3.0] - 2026-08-27
+
+### 修复
+- (critical) GCM GHASH 域混用导致认证标签不符合 RFC 8998
+- 按国密规范修复安全与质量问题
+- 修复审查中发现的安全和质量问题
+
+### 新增
+- 实现 SM2 密文 ASN.1、压缩公钥导入、SM4-CCM、密钥交换官方向量
+
+### 变更
+- test+fix: 补齐新增功能测试覆盖至 93.94%，清理死代码与守卫说明
+- feat!: 为未来大版本待移除项补齐运行时废弃通知（P3 准备阶段）
+- perf+test: SM3 常量表预计算、基准后端探测对齐、异常分支补测 80 例
+- 补充 PHPUnit 覆盖率 source 配置，修复基准脚本 GCM IV 复用
+
+### 文档
+- (test) 补充 GM/T 0003.3 附录A 密钥交换示例存档说明
+- 全面校对文档，修正过时描述与性能数据失真
+
+### 测试
+- 新增国家标准符合性测试（GM/T 官方向量公式级锚定）
+
 ## [v0.2.3] - 2026-05-28
 
 ### 修复
@@ -121,3 +144,4 @@
 [v0.2.1]: https://github.com/pohoc/crypto-sm/compare/v0.2.0...v0.2.1
 [v0.2.2]: https://github.com/pohoc/crypto-sm/compare/v0.2.1...v0.2.2
 [v0.2.3]: https://github.com/pohoc/crypto-sm/compare/v0.2.2...v0.2.3
+[v0.3.0]: https://github.com/pohoc/crypto-sm/compare/v0.2.3...v0.3.0
