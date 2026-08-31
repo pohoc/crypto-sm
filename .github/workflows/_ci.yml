@@ -1,0 +1,83 @@
+name: _ci
+
+on:
+  workflow_call:
+    inputs:
+      php-versions:
+        required: false
+        type: string
+        default: '["8.0", "8.1", "8.2", "8.3", "8.4", "8.5"]'
+
+permissions:
+  contents: read
+
+jobs:
+  composer:
+    name: Composer validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: shivammathur/setup-php@8358ee0e2e8afe63c2fb8253d1d52085811ab1e5 # v2
+        with:
+          php-version: '8.4'
+          extensions: gmp, openssl
+          tools: composer:v2
+          coverage: none
+      - run: composer validate --strict
+      - run: composer install --no-interaction --no-progress --prefer-dist
+      - run: composer check-platform-reqs
+
+  tests:
+    name: PHP ${{ matrix.php }} / ${{ matrix.dependencies }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ${{ fromJSON(inputs.php-versions) }}
+        dependencies: [lowest, highest]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: shivammathur/setup-php@8358ee0e2e8afe63c2fb8253d1d52085811ab1e5 # v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: gmp, openssl
+          tools: composer:v2
+          coverage: none
+      - run: composer validate --strict
+      - name: Install lowest dependencies
+        if: matrix.dependencies == 'lowest'
+        run: composer update --prefer-lowest --prefer-dist --prefer-stable --no-interaction --no-progress
+      - name: Install highest dependencies
+        if: matrix.dependencies == 'highest'
+        run: composer update --prefer-dist --prefer-stable --no-interaction --no-progress
+      - run: composer test
+
+  quality:
+    name: Static analysis and style
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: shivammathur/setup-php@8358ee0e2e8afe63c2fb8253d1d52085811ab1e5 # v2
+        with:
+          php-version: '8.4'
+          extensions: gmp, openssl
+          tools: composer:v2
+          coverage: none
+      - run: composer install --no-interaction --no-progress --prefer-dist
+      - run: composer lint
+      - run: composer cs-check
+      - run: composer analyse
+
+  security:
+    name: Composer audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: shivammathur/setup-php@8358ee0e2e8afe63c2fb8253d1d52085811ab1e5 # v2
+        with:
+          php-version: '8.4'
+          extensions: gmp, openssl
+          tools: composer:v2
+          coverage: none
+      - run: composer install --no-interaction --no-progress --prefer-dist
+      - run: composer audit --no-interaction
