@@ -35,7 +35,9 @@ jobs:
         run: composer validate --strict
 
       - name: Install dependencies
-        run: composer install --no-interaction --prefer-dist
+        # This library intentionally does not commit composer.lock. Resolve the
+        # newest dependency set compatible with each PHP version in the matrix.
+        run: composer update --no-interaction --prefer-dist --prefer-stable
 
       - name: Execute tests
         run: vendor/bin/phpunit --stop-on-error --debug
@@ -55,7 +57,7 @@ jobs:
           tools: phpstan, php-cs-fixer
 
       - name: Install dependencies
-        run: composer install --no-interaction --prefer-dist
+        run: composer update --no-interaction --prefer-dist --prefer-stable
 
       - name: PHPStan (level 9)
         run: phpstan analyse
