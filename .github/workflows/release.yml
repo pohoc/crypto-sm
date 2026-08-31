@@ -1,63 +1,76 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SemVer without v, for example 1.2.3
+        required: true
+        type: string
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
+  validate-version:
+    name: Validate release version
     runs-on: ubuntu-latest
-    # 发布流程只生成 release draft，不回写 main，也不在 tag 事件里制造额外仓库状态变更。
-
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      sha: ${{ steps.main.outputs.sha }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: main
           fetch-depth: 0
-
-      - name: Setup PHP
-        uses: shivammathur/setup-php@8358ee0e2e8afe63c2fb8253d1d52085811ab1e5 # v2
-        with:
-          php-version: '8.4'
-          extensions: gmp, openssl
-
-      - name: Validate composer.json
-        run: composer validate --strict
-
-      - name: Install dependencies
-        run: composer install --no-interaction --prefer-dist
-
-      - name: Get version
-        id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-
-      - name: Generate changelog
-        run: php scripts/changelog.php
-
-      - name: Extract current version changelog
-        id: changelog
+      - id: main
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - id: version
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          VERSION=${{ steps.version.outputs.VERSION }}
-          # 提取当前版本到下一个版本之间的内容
-          NEXT_HEADER=$(grep -n "^## \[" CHANGELOG.md | head -2 | tail -1 | cut -d: -f1)
-          CURR_HEADER=$(grep -n "^## \[" CHANGELOG.md | head -1 | cut -d: -f1)
-          if [ -n "$NEXT_HEADER" ]; then
-            BODY=$(sed -n "$((CURR_HEADER + 1)),$((NEXT_HEADER - 1))p" CHANGELOG.md | sed '/^$/d; /^\[.*\]:/d')
-          else
-            BODY=$(sed -n "$((CURR_HEADER + 1)),\$p" CHANGELOG.md | sed '/^$/d; /^\[.*\]:/d')
-          fi
-          echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
-          echo "$BODY" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]
+          git show-ref --tags --verify --quiet "refs/tags/v$VERSION" && exit 1 || true
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+  full-ci:
+    needs: validate-version
+    uses: ./.github/workflows/_ci.yml
+    secrets: inherit
+
+  publish:
+    name: Create tag and GitHub Release
+    needs: [validate-version, full-ci]
+    if: ${{ needs.full-ci.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          tag_name: ${{ steps.version.outputs.VERSION }}
-          name: Release ${{ steps.version.outputs.VERSION }}
-          body: ${{ steps.changelog.outputs.CHANGELOG }}
-          draft: true
-          prerelease: false
+          ref: main
+          fetch-depth: 0
+      - name: Verify main and create immutable tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate-version.outputs.tag }}
+          EXPECTED_SHA: ${{ needs.validate-version.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin main --prune
+          test "$(git rev-parse origin/main)" = "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          gh api --method POST "/repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f "ref=refs/tags/$TAG" -f "sha=$EXPECTED_SHA"
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate-version.outputs.tag }}
+        run: gh release create "$TAG" --verify-tag --generate-notes --title "$TAG"

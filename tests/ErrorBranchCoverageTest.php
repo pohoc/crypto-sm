@@ -541,11 +541,12 @@ class ErrorBranchCoverageTest extends TestCase
         $key = str_repeat('ef', 16);
         // 构造末字节为 0x00 的合法块（padding=none），再用 iso10126/ansix923 解填充 → 必然失败
         $block = str_repeat('A', 15) . "\x00";
-        $ct = Sm4::encrypt($block, $key, (new Sm4Options())->setPadding('none'));
+        $iv = str_repeat('11', 16);
+        $ct = Sm4::encrypt($block, $key, (new Sm4Options())->setIv($iv)->setPadding('none'));
 
         foreach (['iso10126', 'ansix923'] as $padding) {
             try {
-                Sm4::decrypt($ct, $key, (new Sm4Options())->setIv(str_repeat('11', 16))->setPadding($padding));
+                Sm4::decrypt($ct, $key, (new Sm4Options())->setIv($iv)->setPadding($padding));
                 $this->fail("expected Decryption failed for {$padding}");
             } catch (CryptoException $e) {
                 $this->assertSame('Decryption failed', $e->getMessage());

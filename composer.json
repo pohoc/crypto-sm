@@ -35,12 +35,16 @@
     "phpunit/phpunit": "^9.5|^10.0|^11.0"
   },
   "scripts": {
-    "test": "vendor/bin/phpunit",
-    "analyse": "vendor/bin/phpstan analyse",
+    "test": "vendor/bin/phpunit --configuration phpunit.xml",
+    "test:unit": "vendor/bin/phpunit --configuration phpunit.xml",
+    "lint": "find src tests -type f -name '*.php' -print0 | xargs -0 -n1 php -l",
+    "analyse": "vendor/bin/phpstan analyse --no-progress",
     "cs-check": "vendor/bin/php-cs-fixer fix --dry-run --diff",
     "cs-fix": "vendor/bin/php-cs-fixer fix",
     "changelog": "php scripts/changelog.php",
     "check": [
+      "@composer validate --strict",
+      "@lint",
       "@cs-check",
       "@analyse",
       "@test"
