@@ -297,6 +297,22 @@ class SecurityRegressionTest extends TestCase
 
     /** @runInSeparateProcess */
     #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
+    public function testCcmTrackerExceptionFailsClosedBeforeEncryption(): void
+    {
+        Ccm::setNonceTracker(new class () implements CcmNonceTrackerInterface {
+            public function claim(string $key, string $nonce): bool
+            {
+                throw new \RuntimeException('shared CCM store unavailable');
+            }
+        });
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('shared CCM store unavailable');
+        Ccm::fromKey(random_bytes(16))->encrypt('must not encrypt', random_bytes(12));
+    }
+
+    /** @runInSeparateProcess */
+    #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
     public function testSharedCcmTagLengthTrackerRejectsDifferentEncryptionProfile(): void
     {
         /** @var \ArrayObject<string, int> $profiles */
@@ -1249,6 +1265,22 @@ class SecurityRegressionTest extends TestCase
         $this->expectException(CryptoException::class);
         $this->expectExceptionMessage('tracker cannot be changed');
         Gcm::setIvTracker(null);
+    }
+
+    /** @runInSeparateProcess */
+    #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
+    public function testGcmTrackerExceptionFailsClosedBeforeEncryption(): void
+    {
+        Gcm::setIvTracker(new class () implements GcmIvTrackerInterface {
+            public function claim(string $key, string $iv): bool
+            {
+                throw new \RuntimeException('shared GCM store unavailable');
+            }
+        });
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('shared GCM store unavailable');
+        Gcm::fromKey(random_bytes(16))->encrypt('must not encrypt', random_bytes(12));
     }
 
     /** @runInSeparateProcess */
