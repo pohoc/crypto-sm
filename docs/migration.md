@@ -37,9 +37,9 @@ GCM/CCM 默认追踪器只在当前 PHP 进程内有效。容量达到 65,536 �
 | `CcmTagLengthTrackerInterface` | 每把密钥固定的 CCM 标签长度 |
 | `CcmBlockUsageTrackerInterface` | 每把密钥累计 CCM 分组调用数，不超过 `2^61`；加密和解密都计数，认证失败也计数 |
 | `Sm4KeyModeTrackerInterface` | 每把密钥固定一个模式，跨进程隔离 ECB/CBC/CFB/OFB/CTR/GCM/CCM/raw-block |
-| `Sm4FeedbackIvTrackerInterface` | CBC/CFB/OFB 初始 IV；用于跨进程 IV 去重，不能替代 CFB/OFB 实际反馈分组输入追踪 |
-| `Sm4StreamBlockTrackerInterface` | CTR 计数器区间及 CFB/OFB 实际使用的分组输入；可统一协调流模式分组输入，并在这些模式间去重 |
-| `Sm4CtrCounterTrackerInterface` | 仅 CTR 计数器范围去重；当只使用 CTR 时可作为专用方案 |
+| `Sm4FeedbackIvTrackerInterface` | CBC IV/CFB/OFB 初始 IV；跨进程 IV 去重。单独使用时不替代 CFB/OFB 实际反馈分组输入追踪 |
+| `Sm4StreamBlockTrackerInterface` | CTR 计数器区间及 CFB/OFB 实际使用的分组输入；配置后会优先处理这些模式的共享分组输入追踪，并跳过对应的专用 tracker |
+| `Sm4CtrCounterTrackerInterface` | 仅 CTR 计数器范围去重；仅在未配置统一流分组 tracker 时作为 CTR 专用共享方案 |
 
 模式选择与组合：
 
@@ -48,11 +48,18 @@ GCM/CCM 默认追踪器只在当前 PHP 进程内有效。容量达到 65,536 �
 | GCM | `GcmIvTrackerInterface` + `GcmTagLengthTrackerInterface`；需要跨进程模式隔离时再加 `Sm4KeyModeTrackerInterface` |
 | CCM | `CcmNonceTrackerInterface` + `CcmTagLengthTrackerInterface` + `CcmBlockUsageTrackerInterface`；需要跨进程模式隔离时再加 `Sm4KeyModeTrackerInterface` |
 | CBC | `Sm4FeedbackIvTrackerInterface`；需要跨进程模式隔离时加 `Sm4KeyModeTrackerInterface` |
-| CFB/OFB | 推荐 `Sm4StreamBlockTrackerInterface`，它覆盖反馈输入；若还需协调初始 IV，可同时配置 `Sm4FeedbackIvTrackerInterface`。仅初始 IV tracker 不覆盖实际反馈输入 |
-| CTR | 推荐 `Sm4StreamBlockTrackerInterface`；仅 CTR 部署可选 `Sm4CtrCounterTrackerInterface`。两者是 CTR 范围协调的替代方案，不必重复配置；需要跨模式隔离时另加 `Sm4KeyModeTrackerInterface` |
+| CFB/OFB | 配置 `Sm4StreamBlockTrackerInterface` 时，它从初始 IV 到后续反馈输入统一去重，`Sm4FeedbackIvTrackerInterface` 不会再被调用。未配置统一 tracker 时，可用 `Sm4FeedbackIvTrackerInterface` 协调初始 IV，但库还会保留进程内反馈输入去重；需要跨进程完整协调时应选统一 tracker |
+| CTR | `Sm4StreamBlockTrackerInterface` 优先级最高；未配置它时，`Sm4CtrCounterTrackerInterface` 作为 CTR 专用共享 tracker 并替代本地 CTR 区间表；二者不要同时配置。需要跨模式隔离时另加 `Sm4KeyModeTrackerInterface` |
 | ECB/raw-block | 使用独立密钥并配置 `Sm4KeyModeTrackerInterface` 做跨进程隔离；ECB 不具备语义安全性，不推荐新业务使用 |
 
-以上 tracker 均由应用实现。需要给仅解密的历史密钥使用共享模式 tracker 时，应从可信密钥配置在启动阶段调用 `Sm4::registerKeyMode($keyHex, $mode)` 预登记；不能从待解密数据推断并登记模式。
+以上 tracker 均由应用实现。优先级规则是：`Sm4KeyModeTrackerInterface` 独立负责模式隔离；`Sm4StreamBlockTrackerInterface` 配置后接管 CTR/CFB/OFB 分组输入追踪，CTR 专用 tracker 和 CFB/OFB 初始 IV tracker 不会收到这些调用；未配置统一 tracker 时，CTR 才使用 CTR 专用 tracker，CFB/OFB 才可能调用反馈 IV tracker。不要把统一 tracker 和被它覆盖的专用 tracker 一起配置并误以为两者都会运行。
+
+需要给仅解密的历史密钥使用共享模式 tracker 时，应从可信密钥配置在启动阶段调用 `Sm4::registerKeyMode($keyHex, $mode)` 预登记；不能从待解密数据推断并登记模式。旧 CBC 密钥和新 GCM 密钥必须分开登记、分开管理：
+
+```php
+Sm4::registerKeyMode($oldCbcKeyHex, Sm4::MODE_CBC); // 旧密文只读迁移用
+Sm4::registerKeyMode($newGcmKeyHex, Sm4::MODE_GCM); // 新业务写入/读取
+```
 
 实现要求：
 
@@ -67,8 +74,6 @@ GCM/CCM 默认追踪器只在当前 PHP 进程内有效。容量达到 65,536 �
 ```php
 use CryptoSm\Crypto\Ccm;
 use CryptoSm\Crypto\Gcm;
-use CryptoSm\Interfaces\Sm4KeyModeTrackerInterface;
-use CryptoSm\Interfaces\Sm4StreamBlockTrackerInterface;
 use CryptoSm\SM4\Sm4;
 
 Gcm::setIvTracker($applicationGcmIvTracker);
@@ -79,12 +84,16 @@ Ccm::setTagLengthTracker($applicationCcmTagLengthTracker);
 Ccm::setBlockUsageTracker($applicationCcmBlockUsageTracker);
 
 Sm4::setKeyModeTracker($applicationKeyModeTracker);
-Sm4::setStreamBlockTracker($applicationStreamBlockTracker);
-Sm4::setFeedbackIvTracker($applicationFeedbackIvTracker);
-Sm4::setCtrCounterTracker($applicationCtrCounterTracker); // 仅 CTR 专用部署可选
+Sm4::setStreamBlockTracker($applicationStreamBlockTracker); // 启用后接管 CTR/CFB/OFB 分组追踪
 
-// 如需解密预存的 GCM key，在可信启动配置中登记，而不是信任 payload：
-Sm4::registerKeyMode($legacyKeyHex, Sm4::MODE_GCM);
+// 仅在未配置统一流 tracker、且部署只用 CTR 时改用专用 tracker：
+// Sm4::setCtrCounterTracker($applicationCtrCounterTracker);
+// 未配置统一流 tracker 时，CBC 初始 IV 可使用：
+// Sm4::setFeedbackIvTracker($applicationFeedbackIvTracker);
+
+// 旧 CBC 与新 GCM 使用不同密钥，按可信配置分别登记：
+Sm4::registerKeyMode($oldCbcKeyHex, Sm4::MODE_CBC);
+Sm4::registerKeyMode($newGcmKeyHex, Sm4::MODE_GCM);
 ```
 
 上述示例中的变量由应用创建，库不内置 PDO、Redis 或其他共享存储适配器。接口单测只能验证库对 `true`、`false` 和异常的处理，不能证明应用后端在多进程竞争、故障转移、数据恢复或网络分区时仍满足原子性和一致性。应用应针对实际数据库/缓存集群做并发竞争与故障注入验证。
