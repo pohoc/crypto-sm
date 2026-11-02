@@ -25,7 +25,10 @@ Instead, please report them via email to: **po.hoc4@gmail.com**
 
 | Version | Supported          |
 |---------|--------------------|
-| 1.x     | :white_check_mark: |
+| 0.3.x   | :white_check_mark: |
+| 0.0.x–0.2.x | :x:             |
+
+The `0.3.x` line is the currently supported published release line. Unreleased branches are not release artifacts; fixes are delivered through a tagged release. Older `0.0.x`–`0.2.x` versions are unsupported and should be upgraded.
 
 ## Security Considerations
 

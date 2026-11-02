@@ -20,7 +20,8 @@
 当前 `Sm4::encrypt()`、`Sm4Options` 和 `Sm4::encryptPayload()` 默认使用 GCM。无选项 `Sm4::encrypt()` 输出自包含的 `SM4GCM2` 格式，包含版本标记、IV、密文和认证标签。旧版本默认使用 CBC，旧自包含 CBC 密文应通过 `Sm4::decryptLegacyCbc($ciphertext, $key)` 读取；这是未认证的兼容解密入口，应用应在可信数据迁移流程中使用。
 
 - 默认模式已改变。需要保持旧 CBC 写入协议的调用点，必须显式创建 `Sm4Options` 并设置 `Sm4::MODE_CBC`，同时自行确保 IV 安全性和密文完整性保护。
-- 新 GCM 密文不可被旧版 CBC 默认解密器读取。滚动升级期间应先部署能读取新旧格式的解密端，再切换写入端；旧版实例不得解密新版本写出的 GCM 数据。
+- 新 GCM 密文不可被旧版 CBC 默认解密器读取。SM4 模式隔离保护会拒绝同一密钥先用于 GCM 加密、再用于 CBC 解密；这项保护是有意的，不能通过关闭隔离来绕过。双读迁移必须给新 GCM 配置独立的新密钥/密钥版本，并保留受控的旧 CBC 只读密钥，或使用隔离的旧数据迁移服务批量解密并用新 GCM 密钥重加密。若旧密钥已登记为 GCM，不要再在同一常规服务中读取旧 CBC 数据。
+- 建议迁移顺序：部署能按可信记录版本选择密钥的双读程序；新写入只使用新 GCM 密钥；旧 CBC 只由受控迁移路径读取并转写；核对完成后停用旧密钥。不能仅凭密文前缀或未认证元数据决定密钥/模式。
 - 结构化 payload 的解密模式必须来自可信配置。不要根据未认证密文中的字段自动切换模式。
 - 当前仍支持读取 `SM4GCM1` 旧 GCM 格式和自包含旧 CBC 格式；其他外部封装或自定义 CBC payload 应按旧协议显式解析，并验证其完整性后再解密。
 
@@ -35,6 +36,23 @@ GCM/CCM 默认追踪器只在当前 PHP 进程内有效。容量达到 65,536 �
 | `CcmNonceTrackerInterface` | 每把密钥下的 nonce 唯一记录 |
 | `CcmTagLengthTrackerInterface` | 每把密钥固定的 CCM 标签长度 |
 | `CcmBlockUsageTrackerInterface` | 每把密钥累计 CCM 分组调用数，不超过 `2^61`；加密和解密都计数，认证失败也计数 |
+| `Sm4KeyModeTrackerInterface` | 每把密钥固定一个模式，跨进程隔离 ECB/CBC/CFB/OFB/CTR/GCM/CCM/raw-block |
+| `Sm4FeedbackIvTrackerInterface` | CBC/CFB/OFB 初始 IV；用于跨进程 IV 去重，不能替代 CFB/OFB 实际反馈分组输入追踪 |
+| `Sm4StreamBlockTrackerInterface` | CTR 计数器区间及 CFB/OFB 实际使用的分组输入；可统一协调流模式分组输入，并在这些模式间去重 |
+| `Sm4CtrCounterTrackerInterface` | 仅 CTR 计数器范围去重；当只使用 CTR 时可作为专用方案 |
+
+模式选择与组合：
+
+| 模式 | 接入建议 |
+| --- | --- |
+| GCM | `GcmIvTrackerInterface` + `GcmTagLengthTrackerInterface`；需要跨进程模式隔离时再加 `Sm4KeyModeTrackerInterface` |
+| CCM | `CcmNonceTrackerInterface` + `CcmTagLengthTrackerInterface` + `CcmBlockUsageTrackerInterface`；需要跨进程模式隔离时再加 `Sm4KeyModeTrackerInterface` |
+| CBC | `Sm4FeedbackIvTrackerInterface`；需要跨进程模式隔离时加 `Sm4KeyModeTrackerInterface` |
+| CFB/OFB | 推荐 `Sm4StreamBlockTrackerInterface`，它覆盖反馈输入；若还需协调初始 IV，可同时配置 `Sm4FeedbackIvTrackerInterface`。仅初始 IV tracker 不覆盖实际反馈输入 |
+| CTR | 推荐 `Sm4StreamBlockTrackerInterface`；仅 CTR 部署可选 `Sm4CtrCounterTrackerInterface`。两者是 CTR 范围协调的替代方案，不必重复配置；需要跨模式隔离时另加 `Sm4KeyModeTrackerInterface` |
+| ECB/raw-block | 使用独立密钥并配置 `Sm4KeyModeTrackerInterface` 做跨进程隔离；ECB 不具备语义安全性，不推荐新业务使用 |
+
+以上 tracker 均由应用实现。需要给仅解密的历史密钥使用共享模式 tracker 时，应从可信密钥配置在启动阶段调用 `Sm4::registerKeyMode($keyHex, $mode)` 预登记；不能从待解密数据推断并登记模式。
 
 实现要求：
 
@@ -49,6 +67,9 @@ GCM/CCM 默认追踪器只在当前 PHP 进程内有效。容量达到 65,536 �
 ```php
 use CryptoSm\Crypto\Ccm;
 use CryptoSm\Crypto\Gcm;
+use CryptoSm\Interfaces\Sm4KeyModeTrackerInterface;
+use CryptoSm\Interfaces\Sm4StreamBlockTrackerInterface;
+use CryptoSm\SM4\Sm4;
 
 Gcm::setIvTracker($applicationGcmIvTracker);
 Gcm::setTagLengthTracker($applicationGcmTagLengthTracker);
@@ -56,6 +77,14 @@ Gcm::setTagLengthTracker($applicationGcmTagLengthTracker);
 Ccm::setNonceTracker($applicationCcmNonceTracker);
 Ccm::setTagLengthTracker($applicationCcmTagLengthTracker);
 Ccm::setBlockUsageTracker($applicationCcmBlockUsageTracker);
+
+Sm4::setKeyModeTracker($applicationKeyModeTracker);
+Sm4::setStreamBlockTracker($applicationStreamBlockTracker);
+Sm4::setFeedbackIvTracker($applicationFeedbackIvTracker);
+Sm4::setCtrCounterTracker($applicationCtrCounterTracker); // 仅 CTR 专用部署可选
+
+// 如需解密预存的 GCM key，在可信启动配置中登记，而不是信任 payload：
+Sm4::registerKeyMode($legacyKeyHex, Sm4::MODE_GCM);
 ```
 
 上述示例中的变量由应用创建，库不内置 PDO、Redis 或其他共享存储适配器。接口单测只能验证库对 `true`、`false` 和异常的处理，不能证明应用后端在多进程竞争、故障转移、数据恢复或网络分区时仍满足原子性和一致性。应用应针对实际数据库/缓存集群做并发竞争与故障注入验证。

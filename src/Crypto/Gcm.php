@@ -15,18 +15,14 @@ use CryptoSm\Utils\SensitiveContext;
 /**
  * GCM (Galois/Counter Mode) implementation for SM4.
  *
- * Uses GMP for GF(2^128) multiplication with optimized lookup tables.
+ * Uses GMP for the direct bit-by-bit GF(2^128) multiplication described by
+ * NIST SP 800-38D Algorithm 1.
  * The SM4 block cipher uses OpenSSL's SM4-ECB when available and falls
  * back to the library's pure-PHP SM4 block implementation otherwise.
  *
- * Performance optimizations:
- * - 8-bit (256-entry) lookup table for GHASH multiplication
- * - Precomputed x^8 shifted table to eliminate runtime gfMulX8 calls
- * - Fast gfMulX8 using reduction table (1 lookup vs 8 shift-mask-XOR iterations)
- * - String XOR for block mixing before GMP conversion
- * - gmp_import for fast bytes→GMP conversion
- * - gmp_strval(hex) for fast GMP→bytes conversion
- * - warmup() method for first-call latency elimination
+ * The direct multiplication keeps the field representation explicit and is
+ * checked against the RFC 8998 vectors and an independent reference model.
+ * SM4 block encryption prefers OpenSSL and falls back to the PHP implementation.
  *
  * Reference: NIST SP 800-38D / GM/T 0002-2012
  */
