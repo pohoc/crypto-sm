@@ -50,10 +50,12 @@ var_dump(extension_loaded('gmp'));
 
 ## 兼容性策略
 
-- CI 覆盖 PHP `8.0` 到 `8.5`
+- 最低支持 PHP `8.2`；CI 覆盖 PHP `8.2` 到 `8.5`
 - 常规矩阵使用 `composer install` 验证锁定依赖
 - 最低版本兼容 job 使用 `composer update --prefer-lowest --prefer-stable` 验证最低依赖组合
 - 测试用例需要兼容 `PHPUnit 9/10/11`
+
+从旧版本升级前，请阅读[升级迁移指南](docs/migration.md)，重点检查 SM2 签名默认值、SM4 密文格式以及 PHP 版本要求。
 
 ## 支持的算法
 
