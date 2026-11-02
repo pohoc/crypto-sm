@@ -13,8 +13,12 @@ use CryptoSm\Exception\InvalidKeyException;
 class Sm4Options
 {
     private string $padding = 'pkcs5';
-    private string $mode = 'cbc';
+    private string $mode = Sm4::MODE_GCM;
     private ?string $iv = null;
+
+    private bool $ivExplicitlySet = false;
+
+    private bool $generatedIvUsedForEncryption = false;
 
     /** @var string Additional Authenticated Data for GCM mode */
     private string $aad = '';
@@ -24,7 +28,34 @@ class Sm4Options
 
     public function __construct()
     {
-        // IV is lazily initialized on first access for CBC mode
+        // IV is lazily initialized on first access for the selected mode.
+    }
+
+    public function __clone()
+    {
+        // A generated nonce is owned by one options instance. Copying it to a
+        // clone before first use would let both instances encrypt under the
+        // same key/IV pair while each still considers the nonce unused.
+        if (!$this->ivExplicitlySet) {
+            $this->iv = null;
+            $this->generatedIvUsedForEncryption = false;
+        }
+    }
+
+    /**
+     * Prevent copying generated-IV ownership state through PHP serialization.
+     *
+     * @return array<string, never>
+     */
+    public function __serialize(): array
+    {
+        throw new \LogicException('SM4 options cannot be serialized because generated IV state must remain instance-local');
+    }
+
+    /** @param array<string, mixed> $data */
+    public function __unserialize(array $data): void
+    {
+        throw new \LogicException('SM4 options cannot be unserialized because generated IV state must remain instance-local');
     }
 
     /**
@@ -106,7 +137,7 @@ class Sm4Options
             @trigger_error('SM4 ECB mode is not recommended — it does not provide data confidentiality for repeated patterns. Use CBC or GCM instead.', E_USER_DEPRECATED);
         }
         $this->mode = $mode;
-        $this->iv = null;
+        $this->resetIv();
         return $this;
     }
 
@@ -114,10 +145,14 @@ class Sm4Options
      * Get the initialization vector (IV) as hex string.
      * Lazily generates a random IV for modes that require it if not explicitly set.
      *
-     * IMPORTANT: For GCM mode, you MUST NOT reuse the same IV with the same key.
-     * Call resetIv() or create a new Sm4Options instance before each encryption
-     * to ensure a fresh IV. For decryption, you MUST explicitly set the same IV
-     * that was used during encryption by calling setIv().
+     * Automatically generated IVs are refreshed when an options instance is
+     * reused for encryption. Explicit IVs remain fixed. Their security
+     * requirements depend on the mode: CBC/CFB require unpredictable IVs for
+     * each encryption; OFB requires a unique IV; CTR requires that no counter
+     * block repeat under the same key. The caller is responsible for these
+     * requirements when supplying an IV explicitly. For decryption, you MUST
+     * explicitly set the same IV that was used during encryption.
+     * Automatically generated GCM IVs use the reserved 16-byte SM4R namespace.
      *
      * @return string 32-character hex string (128 bits) for ECB/CBC/CFB/OFB/CTR, or variable-length hex for GCM
      */
@@ -125,7 +160,7 @@ class Sm4Options
     {
         if ($this->iv === null) {
             $this->iv = $this->mode === Sm4::MODE_GCM
-                ? bin2hex(random_bytes(12))
+                ? bin2hex('SM4R' . random_bytes(12))
                 : bin2hex(random_bytes(16));
         }
         return $this->iv;
@@ -143,19 +178,66 @@ class Sm4Options
         return $this->iv !== null;
     }
 
+    /** Whether the current IV was supplied by the caller rather than generated. */
+    public function hasExplicitIv(): bool
+    {
+        return $this->ivExplicitlySet;
+    }
+
     /**
      * Reset the cached IV so that the next getIv() call generates a fresh random IV.
      *
-     * This is especially important for GCM mode, where IV reuse with the same key
-     * is catastrophic for security. Call this method before each new encryption
-     * operation when reusing the same Sm4Options instance.
+     * Call this when you need a new IV before an encryption. SM4 refreshes
+     * automatically generated IVs after their first use, but never changes an
+     * explicitly supplied IV.
      *
      * @return self
      */
     public function resetIv(): self
     {
         $this->iv = null;
+        $this->ivExplicitlySet = false;
+        $this->generatedIvUsedForEncryption = false;
         return $this;
+    }
+
+    /** Refresh an automatically generated IV after its first encryption use. */
+    public function prepareIvForEncryption(): void
+    {
+        if (!$this->ivExplicitlySet && $this->generatedIvUsedForEncryption) {
+            $this->resetIv();
+        }
+    }
+
+    /** Reserve the current automatically generated IV against accidental reuse. */
+    public function markIvUsedForEncryption(): void
+    {
+        if (!$this->ivExplicitlySet) {
+            $this->generatedIvUsedForEncryption = true;
+        }
+    }
+
+    /** @internal Materialize and consume a reserved random GCM IV for one encryption. */
+    public function consumeGeneratedGcmIvForEncryption(): string
+    {
+        if ($this->mode !== Sm4::MODE_GCM || $this->ivExplicitlySet) {
+            throw new InvalidKeyException('Only an automatically generated GCM IV can be consumed');
+        }
+        if ($this->generatedIvUsedForEncryption) {
+            $this->resetIv();
+        }
+
+        $iv = $this->getIv();
+        if (!preg_match('/\A534d3452[0-9a-fA-F]{24}\z/i', $iv)) {
+            throw new InvalidKeyException('Generated GCM IV must use the reserved 16-byte format');
+        }
+        $this->generatedIvUsedForEncryption = true;
+
+        $ivBin = hex2bin($iv);
+        if ($ivBin === false) {
+            throw new InvalidKeyException('Invalid generated GCM IV');
+        }
+        return $ivBin;
     }
 
     /**
@@ -167,7 +249,7 @@ class Sm4Options
      */
     public function setIv(string $iv): self
     {
-        if ($iv !== '' && !preg_match('/^[0-9a-fA-F]+$/', $iv)) {
+        if ($iv !== '' && !preg_match('/\A[0-9a-fA-F]+\z/', $iv)) {
             throw new InvalidKeyException('IV must be a valid hex string');
         }
         if ($iv !== '' && strlen($iv) % 2 !== 0) {
@@ -183,6 +265,8 @@ class Sm4Options
             throw new InvalidKeyException('IV is required for GCM mode');
         }
         $this->iv = $iv;
+        $this->ivExplicitlySet = $iv !== '';
+        $this->generatedIvUsedForEncryption = false;
         return $this;
     }
 
@@ -217,7 +301,7 @@ class Sm4Options
     /**
      * Set the authentication tag length for GCM mode.
      *
-     * @param  int                 $tagLength Tag length in bytes (4, 8, 12, 13, 14, 15, or 16; default 16)
+     * @param  int                 $tagLength Tag length in bytes (12, 13, 14, 15, or 16; default 16)
      * @return self
      * @throws InvalidKeyException If tag length is invalid
      */

@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace CryptoSm\Tests;
 
+use CryptoSm\Exception\InvalidKeyException;
 use CryptoSm\SM2\Keypair;
+use CryptoSm\SM2\Sm2;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -14,9 +16,11 @@ class KeypairTest extends TestCase
 {
     public function testConstructorAndGetters(): void
     {
-        $kp = new Keypair('private123', 'public456');
-        $this->assertEquals('private123', $kp->getPrivateKey());
-        $this->assertEquals('public456', $kp->getPublicKey());
+        $privateKey = str_pad('1', 64, '0', STR_PAD_LEFT);
+        $publicKey = Sm2::getPublicKey($privateKey);
+        $kp = new Keypair($privateKey, $publicKey);
+        $this->assertSame($privateKey, $kp->getPrivateKey());
+        $this->assertSame($publicKey, $kp->getPublicKey());
     }
 
     public function testWithRealSm2KeyPair(): void
@@ -86,25 +90,52 @@ class KeypairTest extends TestCase
 
     public function testKeypairGettersReturnSameValue(): void
     {
-        $kp = new Keypair('priv', 'pub');
+        $kp = Sm2::generateKeyPairHex();
         $this->assertEquals($kp->getPrivateKey(), $kp->getPrivateKey());
         $this->assertEquals($kp->getPublicKey(), $kp->getPublicKey());
     }
 
-    public function testKeypairWithEmptyStrings(): void
+    public function testKeypairRejectsEmptyKeys(): void
     {
-        $kp = new Keypair('', '');
-        $this->assertEquals('', $kp->getPrivateKey());
-        $this->assertEquals('', $kp->getPublicKey());
+        $this->expectException(InvalidKeyException::class);
+        new Keypair('', '');
     }
 
-    public function testKeypairWithLongHexKeys(): void
+    public function testKeypairRejectsMismatchedPublicKey(): void
     {
-        $priv = str_repeat('a', 64);
-        $pub = str_repeat('b', 128);
-        $kp = new Keypair($priv, $pub);
-        $this->assertEquals($priv, $kp->getPrivateKey());
-        $this->assertEquals($pub, $kp->getPublicKey());
+        $first = Sm2::generateKeyPairHex();
+        $second = Sm2::generateKeyPairHex();
+
+        $this->expectException(InvalidKeyException::class);
+        new Keypair($first->getPrivateKey(), $second->getPublicKey());
+    }
+
+    public function testKeypairRejectsOffCurvePublicKey(): void
+    {
+        $privateKey = str_pad('1', 64, '0', STR_PAD_LEFT);
+
+        $this->expectException(InvalidKeyException::class);
+        new Keypair($privateKey, str_repeat('0', 128));
+    }
+
+    public function testKeypairAcceptsUppercaseMatchingPublicKey(): void
+    {
+        $privateKey = str_pad('1', 64, '0', STR_PAD_LEFT);
+        $publicKey = strtoupper(Sm2::getPublicKey($privateKey));
+        $keypair = new Keypair($privateKey, $publicKey);
+
+        $this->assertSame($publicKey, $keypair->getPublicKey());
+    }
+
+    public function testKeypairAcceptsMaximumEphemeralScalar(): void
+    {
+        $privateKey = 'fffffffeffffffffffffffffffffffff7203df6b21c6052b53bbf40939d54122';
+        $publicKey = Sm2::getEphemeralPublicKey($privateKey);
+
+        $keypair = new Keypair($privateKey, $publicKey);
+
+        $this->assertSame($privateKey, $keypair->getPrivateKey());
+        $this->assertSame($publicKey, $keypair->getPublicKey());
     }
 
     // ========================================================================

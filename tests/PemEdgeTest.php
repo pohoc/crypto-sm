@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace CryptoSm\Tests;
 
-use CryptoSm\Exception\CryptoException;
+use CryptoSm\Crypto\Asn1;
 use CryptoSm\Exception\InvalidKeyException;
 use CryptoSm\SM2\Pem;
 use CryptoSm\SM2\Sm2;
@@ -16,6 +16,101 @@ use PHPUnit\Framework\TestCase;
  */
 final class PemEdgeTest extends TestCase
 {
+    public function testOidDecoderRejectsNonMinimalAndOversizedComponents(): void
+    {
+        $decodeOid = new \ReflectionMethod(Pem::class, 'decodeOid');
+        $cases = [
+            ["\x06\x02\x80\x2a", 'non-minimal OID component'],
+            ["\x06\x0b" . str_repeat("\xff", 10) . "\x00", 'OID component exceeds supported range'],
+        ];
+
+        foreach ($cases as [$der, $message]) {
+            try {
+                $decodeOid->invoke(null, $der, 0);
+                $this->fail('Malformed OID component must be rejected');
+            } catch (InvalidKeyException $exception) {
+                $this->assertStringContainsString($message, $exception->getMessage());
+            }
+        }
+
+        $kp = Sm2::generateKeyPairHex();
+        $nonMinimalAlgorithmOid = "\x06\x08\x80\x2a\x86\x48\xce\x3d\x02\x01";
+        $sm2CurveOid = "\x06\x08\x2a\x81\x1c\xcf\x55\x01\x82\x2d";
+        $algorithm = "\x30\x14" . $nonMinimalAlgorithmOid . $sm2CurveOid;
+        $point = "\x04" . (string) hex2bin($kp->getPublicKey());
+        $bitString = "\x03" . chr(strlen($point) + 1) . "\0" . $point;
+        $content = $algorithm . $bitString;
+        $spki = "\x30" . chr(strlen($content)) . $content;
+
+        try {
+            Pem::importPublicKeyFromDer($spki);
+            $this->fail('Non-minimal algorithm OID must not be accepted in SPKI');
+        } catch (InvalidKeyException $exception) {
+            $this->assertStringContainsString('non-minimal OID component', $exception->getMessage());
+        }
+    }
+
+    public function testDerLengthRejectsDeclaredLengthBeyondInput(): void
+    {
+        $parseLength = new \ReflectionMethod(Pem::class, 'parseDerLength');
+        $oversizedLength = "\x84\x80\x00\x00\x00"; // 2 GiB cannot fit in this buffer
+
+        $this->expectException(InvalidKeyException::class);
+        $parseLength->invoke(null, $oversizedLength, 0);
+    }
+
+    public function testPemImportRejectsOversizedInputBeforeDecoding(): void
+    {
+        $oversizedPem = "-----BEGIN PUBLIC KEY-----\n"
+            . str_repeat('A', 1024 * 1024)
+            . "\n-----END PUBLIC KEY-----";
+
+        $this->expectException(InvalidKeyException::class);
+        $this->expectExceptionMessage('Invalid PEM data');
+        Pem::importPublicKey($oversizedPem);
+    }
+
+    public function testDerKeyImportsRejectOversizedInputBeforeParsing(): void
+    {
+        $oversizedDer = str_repeat("\0", 16 * 1024 + 1);
+
+        foreach ([
+            static fn () => Pem::importPrivateKeyFromDer($oversizedDer),
+            static fn () => Pem::importPublicKeyFromDer($oversizedDer),
+        ] as $import) {
+            try {
+                $import();
+                $this->fail('Oversized DER key input must be rejected before parsing');
+            } catch (InvalidKeyException $exception) {
+                $this->assertSame('Invalid DER data: exceeds maximum key input size', $exception->getMessage());
+            }
+        }
+    }
+
+    public function testDerLengthRejectsNegativeOffset(): void
+    {
+        $parseLength = new \ReflectionMethod(Pem::class, 'parseDerLength');
+
+        try {
+            $parseLength->invoke(null, "\x00\x02", -1);
+            $this->fail('Negative DER length offset must be rejected');
+        } catch (InvalidKeyException $exception) {
+            $this->assertSame('Invalid DER: unexpected end of length field', $exception->getMessage());
+        }
+    }
+
+    public function testDerLengthRejectsLongFormForShortLength(): void
+    {
+        $parseLength = new \ReflectionMethod(Pem::class, 'parseDerLength');
+
+        try {
+            $parseLength->invoke(null, "\x81\x7f" . str_repeat("\0", 127), 0);
+            $this->fail('DER short lengths must use the short form');
+        } catch (InvalidKeyException $exception) {
+            $this->assertSame('Invalid DER: non-minimal length encoding', $exception->getMessage());
+        }
+    }
+
     /** 合法 SEC1（含压缩点可选）合成器 */
     private static function sec1(string $privHex, ?string $point = null): string
     {
@@ -34,6 +129,52 @@ final class PemEdgeTest extends TestCase
         $content = $version . $keyOctet . $curveCtx . $pubCtx;
 
         return "\x30" . chr(strlen($content)) . $content;
+    }
+
+    private static function pkcs8WithInnerSec1(string $inner): string
+    {
+        $algorithm = hex2bin('301306072a8648ce3d020106082a811ccf5501822d');
+        self::assertIsString($algorithm);
+        $octetString = "\x04" . Asn1::encodeLength(strlen($inner)) . $inner;
+        $content = "\x02\x01\x00" . $algorithm . $octetString;
+
+        return "\x30" . Asn1::encodeLength(strlen($content)) . $content;
+    }
+
+    public function testSec1AndPkcs8ImportRejectMismatchedEmbeddedPublicKey(): void
+    {
+        $privateKey = str_pad('1', 64, '0', STR_PAD_LEFT);
+        $otherPrivateKey = str_pad('2', 64, '0', STR_PAD_LEFT);
+        $otherPublicKey = hex2bin(Sm2::getPublicKey($otherPrivateKey));
+        self::assertIsString($otherPublicKey);
+
+        $sec1 = self::sec1($privateKey, "\x04" . $otherPublicKey);
+        $encodings = [$sec1, self::pkcs8WithInnerSec1($sec1)];
+
+        foreach ($encodings as $der) {
+            try {
+                Pem::importPrivateKeyFromDer($der);
+                $this->fail('Private-key import must reject a mismatched embedded public key');
+            } catch (InvalidKeyException $exception) {
+                $this->assertStringContainsString('public key does not match private key', $exception->getMessage());
+            }
+        }
+    }
+
+    public function testStandaloneSec1RequiresCurveParameters(): void
+    {
+        $priv = '09' . str_repeat('ab', 31);
+        $withParameters = self::sec1($priv);
+        $curveOffset = strpos($withParameters, "\xa0");
+        self::assertNotFalse($curveOffset);
+        $curveLength = ord($withParameters[$curveOffset + 1]) + 2;
+        $withoutParametersBody = substr($withParameters, 2, $curveOffset - 2)
+            . substr($withParameters, $curveOffset + $curveLength);
+        $withoutParameters = "\x30" . chr(strlen($withoutParametersBody)) . $withoutParametersBody;
+
+        $this->expectException(InvalidKeyException::class);
+        $this->expectExceptionMessage('missing required SM2 curve parameters');
+        Pem::importPrivateKeyFromDer($withoutParameters);
     }
 
     /** 合法 SPKI 合成器（$point 为完整 BIT STRING 内容，含首字节标记）*/
@@ -67,8 +208,8 @@ final class PemEdgeTest extends TestCase
         $badPoint = "\x03" . substr((string) hex2bin($x), 0, 10);
         $spki = self::spki($badPoint);
 
-        $this->expectException(CryptoException::class);
-        $this->expectExceptionMessage('Invalid x coordinate format');
+        $this->expectException(InvalidKeyException::class);
+        $this->expectExceptionMessage('Invalid public key: Invalid x coordinate format');
         Pem::importPublicKeyFromDer($spki);
     }
 
@@ -124,6 +265,21 @@ final class PemEdgeTest extends TestCase
         Pem::importPrivateKeyFromDer($mutated);
     }
 
+    public function testPkcs8ExportIncludesRequiredInnerCurveParameters(): void
+    {
+        $privateKey = str_pad('19', 64, '0', STR_PAD_LEFT);
+        $der = Pem::exportPrivateKeyPkcs8Der($privateKey);
+
+        // RFC 5915 requires ECPrivateKey.parameters in conforming encodings.
+        $innerSec1WithCurve = "\x02\x01\x01\x04\x20" . hex2bin($privateKey)
+            . "\xa0\x0a\x06\x08\x2a\x81\x1c\xcf\x55\x01\x82\x2d";
+        $this->assertStringContainsString($innerSec1WithCurve, $der);
+
+        $imported = Pem::importPrivateKeyFromDer($der);
+        $this->assertSame($privateKey, $imported['privateKey']);
+        $this->assertSame(Sm2::getPublicKey($privateKey), $imported['publicKey']);
+    }
+
     public function testPkcs8InnerTruncatedRejected(): void
     {
         $priv = '17' . str_repeat('77', 31);
@@ -162,17 +318,71 @@ final class PemEdgeTest extends TestCase
         Pem::importCiphertextAsn1($mutated);
     }
 
-    public function testExportAsn1HandlesLeadingZeroAndHighBitCoordinates(): void
+    public function testImportAsn1RejectsNegativeCoordinateInteger(): void
     {
-        // 强制 C1 x/y 分别以 00xx 与 >=0x80 开头：通过暴力搜索一对合法密钥极为困难，
-        // 改用真实密钥做三种子模式断言（覆盖率回归保护），重点是不抛异常且可导回
-        for ($i = 0; $i < 6; $i++) {
-            $kp = Sm2::generateKeyPairHex();
-            $ct = Sm2::doEncrypt('pad branch probe ' . $i, $kp->getPublicKey());
-            $der = Pem::exportCiphertextAsn1($ct);
-            $back = Pem::importCiphertextAsn1($der);
-            $this->assertSame(strtolower($ct), strtolower($back), "round #$i");
-        }
+        $c1 = '32c4ae2c1f1981195f9904466a39c9948fe30bbff2660be1715a4589334c74c7'
+            . 'bc3736a2f4f6779c59bdcee36b692153d0a9877cc62a474002df32e52139f0a0';
+        $der = Pem::exportCiphertextAsn1($c1 . str_repeat('0', 64) . '00');
+        $o = self::asn1ContentOffset($der);
+        $xLen = ord($der[$o + 1]);
+        $x = substr($der, $o + 2, $xLen);
+        $rest = substr($der, $o + 2 + $xLen);
+        $negativeX = "\x80" . $x;
+        $content = "\x02" . chr(strlen($negativeX)) . $negativeX . $rest;
+        $mutated = "\x30" . chr(strlen($content)) . $content;
+
+        $this->expectException(InvalidKeyException::class);
+        $this->expectExceptionMessage('x INTEGER must be non-negative');
+        Pem::importCiphertextAsn1($mutated);
+    }
+
+    public function testImportAsn1RejectsNonMinimalCoordinateInteger(): void
+    {
+        $c1 = '32c4ae2c1f1981195f9904466a39c9948fe30bbff2660be1715a4589334c74c7'
+            . 'bc3736a2f4f6779c59bdcee36b692153d0a9877cc62a474002df32e52139f0a0';
+        $der = Pem::exportCiphertextAsn1($c1 . str_repeat('0', 64) . '00');
+        $o = self::asn1ContentOffset($der);
+        $xLen = ord($der[$o + 1]);
+        $x = substr($der, $o + 2, $xLen);
+        $rest = substr($der, $o + 2 + $xLen);
+        $redundantX = "\0" . $x;
+        $content = "\x02" . chr(strlen($redundantX)) . $redundantX . $rest;
+        $mutated = "\x30" . chr(strlen($content)) . $content;
+
+        $this->expectException(InvalidKeyException::class);
+        $this->expectExceptionMessage('non-minimal x INTEGER');
+        Pem::importCiphertextAsn1($mutated);
+    }
+
+    public function testExportAsn1CiphertextRejectsTrailingNewlineInC2(): void
+    {
+        $publicKey = Sm2::getPublicKey(str_pad('1', 64, '0', STR_PAD_LEFT));
+        $ciphertext = $publicKey . str_repeat('a', 64) . "a1\n";
+
+        $this->expectException(InvalidKeyException::class);
+        Pem::exportCiphertextAsn1($ciphertext);
+    }
+
+    public function testExportAsn1NormalizesPrefixedC1AndHighBitCoordinate(): void
+    {
+        // DER carries the C1 coordinates as INTEGERs, so import returns the
+        // canonical x||y form without SEC1's optional 04 point prefix.
+        // The fixed SM2 base point also guarantees a high-bit y coordinate,
+        // exercising DER's required leading 00 sign pad without random cases.
+        $c1 = '32c4ae2c1f1981195f9904466a39c9948fe30bbff2660be1715a4589334c74c7'
+            . 'bc3736a2f4f6779c59bdcee36b692153d0a9877cc62a474002df32e52139f0a0';
+        $c3 = str_repeat('ab', 32);
+        $c2 = 'cafe';
+        $der = Pem::exportCiphertextAsn1('04' . $c1 . $c3 . $c2);
+        $back = Pem::importCiphertextAsn1($der);
+
+        $this->assertSame($c1 . $c3 . $c2, $back);
+
+        $offset = self::asn1ContentOffset($der);
+        $this->assertSame(32, ord($der[$offset + 1]));
+        $yOffset = $offset + 2 + 32;
+        $this->assertSame(33, ord($der[$yOffset + 1]));
+        $this->assertSame("\0", $der[$yOffset + 2]);
     }
 
     /** @return array{0: string, 1: string} [密文hex, DER] */

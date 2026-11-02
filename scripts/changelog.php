@@ -126,7 +126,7 @@ function getTags(): array
 function getTagDate(string $tag): ?DateTime
 {
     $output = [];
-    exec("git log -1 --format=%ai " . escapeshellarg($tag), $output);
+    exec("git log -1 --format=%ai --end-of-options " . escapeshellarg($tag), $output);
     if (!empty($output[0])) {
         return new DateTime(trim($output[0]));
     }
@@ -151,7 +151,7 @@ function buildRanges(array $tags): array
 function getCommits(string $range): array
 {
     $output = [];
-    exec("git log --no-merges --format=%s " . escapeshellarg($range), $output);
+    exec("git log --no-merges --format=%s --end-of-options " . escapeshellarg($range), $output);
     return array_filter($output);
 }
 

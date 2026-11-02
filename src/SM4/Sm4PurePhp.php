@@ -5,16 +5,19 @@ declare(strict_types=1);
 namespace CryptoSm\SM4;
 
 use CryptoSm\Exception\CryptoException;
+use CryptoSm\Utils\SensitiveContext;
 
 /**
  * Pure PHP SM4 block cipher implementation (GM/T 0002-2012).
  *
  * Used as fallback when the OpenSSL extension does not provide SM4 support.
  * Implements the block primitive used by ECB directly and by CBC, CFB,
- * OFB, CTR, and GCM fallback composition in Sm4/Gcm.
+ * OFB, CTR, CCM, and GCM fallback composition. Direct block use is tracked as
+ * a separate key usage so it cannot share a key with a higher-level mode.
  */
 final class Sm4PurePhp
 {
+    use SensitiveContext;
     /**
      * SM4 S-box (8x8 substitution, 256 entries).
      * Defined in GM/T 0002-2012 Appendix A.
@@ -53,11 +56,30 @@ final class Sm4PurePhp
         0x10171E25, 0x2C333A41, 0x484F565D, 0x646B7279,
     ];
 
-    /** @var array<int,int> 32 round keys */
-    private array $roundKeys;
+    /** @var \WeakMap<object, array<int, int>>|null */
+    private static ?\WeakMap $keyStates = null;
 
-    /** @var bool Whether keys are initialized */
-    private bool $keyInitialized = false;
+    private object $keyHandle;
+
+    public function __construct()
+    {
+        $this->keyHandle = new \stdClass();
+    }
+
+    public function __clone()
+    {
+        $keys = self::keyStates()[$this->keyHandle] ?? null;
+        $this->keyHandle = new \stdClass();
+        if ($keys !== null) {
+            self::keyStates()[$this->keyHandle] = $keys;
+        }
+    }
+
+    /** @return \WeakMap<object, array<int, int>> */
+    private static function keyStates(): \WeakMap
+    {
+        return self::$keyStates ??= new \WeakMap();
+    }
 
     /**
      * Encrypt a single 16-byte block.
@@ -71,9 +93,7 @@ final class Sm4PurePhp
         if (strlen($block) !== 16) {
             throw new CryptoException('SM4 block must be 16 bytes');
         }
-        $this->ensureKey();
-
-        return $this->processBlock($block, $this->roundKeys);
+        return $this->processBlock($block, $this->roundKeys());
     }
 
     /**
@@ -88,10 +108,8 @@ final class Sm4PurePhp
         if (strlen($block) !== 16) {
             throw new CryptoException('SM4 block must be 16 bytes');
         }
-        $this->ensureKey();
-
         // Decryption uses round keys in reverse order
-        return $this->processBlock($block, array_reverse($this->roundKeys));
+        return $this->processBlock($block, array_reverse($this->roundKeys()));
     }
 
     /**
@@ -101,11 +119,45 @@ final class Sm4PurePhp
      */
     public function setKey(string $keyBin): void
     {
+        $this->validateKey($keyBin);
+        Sm4::claimEncryptionModeForKey($keyBin, 'raw-block');
+        $this->expandKey($keyBin);
+    }
+
+    /**
+     * Initialize the fallback engine for an enclosing SM4 mode.
+     *
+     * @internal Only mode implementations may use this entry point; callers
+     *           performing raw block operations must use setKey(). Mode
+     *           registration is owned by the enclosing encryption API.
+     */
+    public function setKeyForMode(string $keyBin, string $mode): void
+    {
+        if (!in_array(
+            $mode,
+            [Sm4::MODE_ECB, Sm4::MODE_CBC, Sm4::MODE_CFB, Sm4::MODE_OFB, Sm4::MODE_CTR, Sm4::MODE_CCM, Sm4::MODE_GCM],
+            true
+        )) {
+            throw new CryptoException('Unsupported SM4 mode for block engine initialization');
+        }
+
+        $this->validateKey($keyBin);
+        $this->expandKey($keyBin);
+    }
+
+    private function validateKey(string $keyBin): void
+    {
         if (strlen($keyBin) !== 16) {
             throw new CryptoException('SM4 key must be 16 bytes');
         }
-        $this->roundKeys = self::keyExpansion($keyBin);
-        $this->keyInitialized = true;
+        if (PHP_INT_SIZE < 8) {
+            throw new CryptoException('Pure PHP SM4 requires a 64-bit PHP runtime; use OpenSSL SM4 on 32-bit platforms');
+        }
+    }
+
+    private function expandKey(string $keyBin): void
+    {
+        self::keyStates()[$this->keyHandle] = self::keyExpansion($keyBin);
     }
 
     /** @var bool|null Cached availability of the OpenSSL SM4-ECB cipher */
@@ -116,17 +168,36 @@ final class Sm4PurePhp
      */
     public static function openSslSm4Available(): bool
     {
-        return self::$openSslSm4Available ??= function_exists('openssl_encrypt')
-            && in_array('SM4-ECB', openssl_get_cipher_methods(), true);
+        if (self::$openSslSm4Available !== null) {
+            return self::$openSslSm4Available;
+        }
+        if (!function_exists('openssl_encrypt')
+            || !in_array('sm4-ecb', array_map('strtolower', openssl_get_cipher_methods()), true)) {
+            return self::$openSslSm4Available = false;
+        }
+
+        // Providers may advertise a cipher alias that the active configuration
+        // cannot execute. Probe the operation so callers can fall back safely.
+        $probe = @openssl_encrypt(
+            str_repeat("\0", 16),
+            'SM4-ECB',
+            str_repeat("\0", 16),
+            OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING
+        );
+
+        return self::$openSslSm4Available = is_string($probe) && strlen($probe) === 16;
     }
 
     // ─── Internal Implementation ─────────────────────────────────────────
 
-    private function ensureKey(): void
+    /** @return array<int, int> */
+    private function roundKeys(): array
     {
-        if (!$this->keyInitialized) {
+        $keys = self::keyStates()[$this->keyHandle] ?? null;
+        if ($keys === null) {
             throw new CryptoException('SM4 key not set — call setKey() first');
         }
+        return $keys;
     }
 
     /**

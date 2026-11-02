@@ -1,12 +1,11 @@
 # Crypto-SM
 
-[![PHP Version](https://img.shields.io/badge/PHP-8.0%20~%208.5-blue.svg)](https://www.php.net/)
+[![PHP Version](https://img.shields.io/badge/PHP-8.2%2B-blue.svg)](https://www.php.net/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![CI](https://github.com/pohoc/crypto-sm/actions/workflows/php.yml/badge.svg)](https://github.com/pohoc/crypto-sm/actions/workflows/php.yml)
 
 国密算法 SM2、SM3、SM4 的 PHP 实现。
 
-**PHP 国密库** — 支持 SM2 密钥交换、PEM 导入/导出、HMAC-SM3、SM3 流式哈希、SM4 全 6 种模式（ECB/CBC/CFB/OFB/CTR/GCM）和 5 种填充模式。
+**PHP 国密库** — 支持 SM2 密钥交换、PEM 导入/导出、HMAC-SM3、PBKDF2-HMAC-SM3、SM3 流式哈希、SM4 全 6 种模式（ECB/CBC/CFB/OFB/CTR/GCM）和 5 种填充模式。
 
 ## 安装
 
@@ -16,7 +15,7 @@ composer require pohoc/crypto-sm
 
 ## 环境要求
 
-- PHP 8.0 ~ 8.5
+- PHP 8.2+
 - GMP 扩展
 - OpenSSL 扩展
 
@@ -61,7 +60,7 @@ var_dump(extension_loaded('gmp'));
 ### SM2
 中国椭圆曲线公钥密码算法 (GM/T 0003-2012)
 - 密钥生成
-- 加密/解密（C1C3C2 / C1C2C3 模式）
+- 加密/解密（默认使用 GB/T 32918.4-2016 的 C1C3C2 与 SEC1 `04||x||y` 点编码；兼容 C1C2C3 和无前缀输入）
 - 签名/验签（RS 拼接 / DER 格式，自动检测）
 - PEM 导入/导出（SEC 1 / PKCS#8 / SubjectPublicKeyInfo）
 - 密钥交换（GM/T 0003-2012 Section 6）
@@ -71,6 +70,7 @@ var_dump(extension_loaded('gmp'));
 - 哈希计算（OpenSSL 加速 + 纯 PHP 回退）
 - 流式哈希（支持大文件分块处理）
 - HMAC-SM3（RFC 2104）
+- PBKDF2-HMAC-SM3（RFC 8018）
 
 ### SM4
 中国分组密码算法 (GM/T 0002-2012)
@@ -106,9 +106,14 @@ $ciphertext = Sm2::doEncrypt('Hello World', $publicKey);
 // 解密
 $plaintext = Sm2::doDecrypt($ciphertext, $privateKey);
 
-// 签名（不哈希）
+// 标准 SM2 消息签名（默认使用 SM3(ZA || M)）
 $signature = Sm2::doSignature('Message', $privateKey);
 $isValid = Sm2::doVerifySignature('Message', $signature, $publicKey);
+
+// 仅在上游已按协议计算 SM2 摘要时关闭内部哈希；输入必须恰好 32 字节
+$legacyOptions = (new SignatureOptions())->setHash(false);
+$precomputedDigest = hex2bin($digestHex); // 64 个十六进制字符
+$legacySignature = Sm2::doSignature($precomputedDigest, $privateKey, $legacyOptions);
 
 // 签名（哈希并指定用户 ID）
 $options = (new SignatureOptions())
@@ -147,6 +152,12 @@ $publicKey = Pem::importPublicKey($pem);
 ```
 
 #### SM2 密钥交换
+
+> **安全注意：** 下方 `initiatorComputeKey()` / `responderComputeKey()` 只派生共享密钥，
+> 不执行对端密钥确认。仅比较双方算出的密钥是否相同不是协议确认步骤；在网络协议中，
+> 不要在收到并验证确认值前使用派生密钥。请使用带确认值的 API，并严格遵循
+> [`docs/sm2.md` 中的 S_A/S_B 交互顺序](docs/sm2.md#密钥确认便捷方法)：响应方先发送
+> S_B，发起方验证后才发送 S_A，双方分别在完成各自的确认步骤后使用密钥。
 
 ```php
 use CryptoSm\SM2\KeyExchange;
@@ -204,6 +215,7 @@ use CryptoSm\SM3\HmacSm3;
 
 // 一次性计算
 $mac = HmacSm3::hmac('secret_key', 'message');
+$valid = HmacSm3::verify('secret_key', 'message', $receivedMac); // hash_equals 安全比较
 
 // 流式计算
 $hmac = HmacSm3::create('secret_key');
@@ -221,9 +233,9 @@ use CryptoSm\SM4\Sm4Options;
 $key = '0123456789abcdeffedcba9876543210'; // 32 位十六进制，128 bit
 $data = 'Hello World';
 
-// CBC 模式（默认）
+// CBC 兼容模式（需显式选择；不提供密文完整性）
 $iv  = '000102030405060708090a0b0c0d0e0f';
-$options = (new Sm4Options())->setIv($iv);
+$options = (new Sm4Options())->setMode(Sm4::MODE_CBC)->setIv($iv);
 $ciphertext = Sm4::encrypt($data, $key, $options);
 $plaintext = Sm4::decrypt($ciphertext, $key, $options);
 
@@ -232,16 +244,16 @@ $options = (new Sm4Options())->setMode(Sm4::MODE_ECB);
 $ciphertext = Sm4::encrypt($data, $key, $options);
 $plaintext = Sm4::decrypt($ciphertext, $key, $options);
 
-// CFB 模式（流式，无需填充）
+// CFB 模式（流式，无需填充；仅加密、不认证，需另加 MAC）
 $options = (new Sm4Options())->setMode(Sm4::MODE_CFB)->setIv($iv);
 $ciphertext = Sm4::encrypt($data, $key, $options);
 $plaintext = Sm4::decrypt($ciphertext, $key, $options);
 
-// OFB 模式
+// OFB 模式（仅加密、不认证，需另加 MAC）
 $options = (new Sm4Options())->setMode(Sm4::MODE_OFB)->setIv($iv);
 $ciphertext = Sm4::encrypt($data, $key, $options);
 
-// CTR 模式
+// CTR 模式（仅加密、不认证，需另加 MAC）
 $options = (new Sm4Options())->setMode(Sm4::MODE_CTR)->setIv($iv);
 $ciphertext = Sm4::encrypt($data, $key, $options);
 
@@ -251,7 +263,7 @@ $options = (new Sm4Options())
     ->setMode(Sm4::MODE_GCM)
     ->setIv($gcmIv)
     ->setAad('additional data') // 附加认证数据
-    ->setTagLength(16);         // 认证标签长度（4/8/12/13/14/15/16 字节）
+    ->setTagLength(16);         // 认证标签长度（12/13/14/15/16 字节）
 $ciphertext = Sm4::encrypt($data, $key, $options);
 // 密文格式：ciphertext_hex + tag_hex
 $plaintext = Sm4::decrypt($ciphertext, $key, $options);
@@ -332,14 +344,14 @@ $ciphertext = SmCrypto::sm4Encrypt($data, $key, $options);
 $plaintext = SmCrypto::sm4Decrypt($ciphertext, $key, $options);
 ```
 
-> SM4 不传 `Sm4Options` 时使用默认 CBC，并返回 `iv_hex + ciphertext_hex`，可直接传给 `sm4Decrypt()`。显式传入 `Sm4Options` 时返回值只包含密文，调用方必须保存 IV，并在解密时通过 `setIv()` 传回同一个 IV——解密缺少 IV 会抛出异常（不会静默生成随机 IV 导致乱码）。
+> `Sm4::encrypt()` 和 `Sm4Options` 默认使用 GCM。无选项时返回 `SM4GCM2` 自包含格式（版本标记、IV、密文和认证标签），可直接传回解密；仍支持解密 `SM4GCM1` 和旧版自包含 CBC 密文。需使用 CBC 的既有调用应显式指定 `MODE_CBC`，因为 CBC 不认证密文。
 
 ## 特性
 
 - **零运行时依赖** — 仅需 `ext-gmp` 和 `ext-openssl`
 - **OpenSSL 加速** — SM3 和 SM4（CBC/ECB/CFB/OFB/CTR）优先使用 OpenSSL 原生实现；OpenSSL 不支持 SM4 时自动回退到纯 PHP
 - **标准合规** — 通过 GM/T 0002/0003/0004 标准测试向量与 RFC 8998 SM4-GCM 官方向量验证（720+ 测试，1,000,000+ 断言）
-- **安全** — GCM 认证标签时序安全比较、GCM IV 重用检测（默认开启）、解密缺 IV 显式报错、DER 签名自动检测、安全随机数生成、SM2 签名 60000+ 次零失败验证
+- **安全** — GCM 认证标签时序安全比较、门面与低层 `Gcm` 默认检测进程内重复 key/IV、CTR 默认拒绝进程内重叠计数器区间（需跨进程保证时配置共享 tracker）、解密缺 IV 显式报错、DER 签名自动检测、安全随机数生成、SM2 签名 60000+ 次零失败验证
 - **正确性锚定** — GCM 另有 NIST SP 800-38D 规范直译参考模型差分测试（GcmReferenceModelTest）与解析器模糊测试（FuzzTest）
 - **优雅 API** — 门面 + 子系统双层 API，选项对象链式调用
 
@@ -351,8 +363,9 @@ $plaintext = SmCrypto::sm4Decrypt($ciphertext, $key, $options);
 性能高度依赖运行环境的国密加速能力，请先确认后端再对照数据：
 
 ```php
-var_dump(in_array('sm3', hash_algos(), true));                    // SM3 原生加速
-var_dump(in_array('SM4-ECB', openssl_get_cipher_methods(), true)); // SM4 原生加速
+var_dump(in_array('sm3', array_map('strtolower', hash_algos()), true)); // SM3 原生加速
+$sm4Methods = array_map('strtolower', openssl_get_cipher_methods());
+var_dump(in_array('sm4-ecb', $sm4Methods, true)); // OpenSSL 宣告支持 SM4-ECB
 ```
 
 基准脚本会自动探测并如实标注后端；基线阈值仅在所需后端可用时参与比较
@@ -360,7 +373,7 @@ var_dump(in_array('SM4-ECB', openssl_get_cipher_methods(), true)); // SM4 原生
 
 ### 环境 A：OpenSSL 原生国密加速（参考值）
 
-要求 `hash_algos()` 含 `sm3` 且 OpenSSL 含 `SM4-ECB`（常见于链接 OpenSSL 1.1.1+/3.x 的 Linux 发行版 PHP）。
+要求 `hash_algos()` 含 `sm3` 且 OpenSSL 含 `sm4-ecb`（方法名按小写规范化；常见于链接 OpenSSL 1.1.1+/3.x 的 Linux 发行版 PHP）。库还会实际探测 OpenSSL 能否执行该分组密码；仅出现在方法列表中不代表可执行。
 下表为该类环境的历史参考量级：
 
 | 操作 | 数据大小 | 平均耗时 | 吞吐量 |
@@ -447,7 +460,7 @@ composer check
 
 GitHub Actions 自动化流水线，每次 push/PR 自动运行：
 
-- **多版本测试** — PHP 8.0 / 8.1 / 8.2 / 8.3 / 8.4 / 8.5 矩阵测试
+- **多版本测试** — PHP 8.2 / 8.3 / 8.4 / 8.5 矩阵测试
 - **静态分析** — PHPStan level 9 + PSR-12 代码风格检查
 - **安全审计** — Composer audit 依赖漏洞扫描
 

@@ -18,6 +18,7 @@ permissions:
 jobs:
   validate-version:
     name: Validate release version
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.version.outputs.tag }}
@@ -42,7 +43,8 @@ jobs:
   full-ci:
     needs: validate-version
     uses: ./.github/workflows/_ci.yml
-    secrets: inherit
+    with:
+      checkout-ref: ${{ needs.validate-version.outputs.sha }}
 
   publish:
     name: Create tag and GitHub Release

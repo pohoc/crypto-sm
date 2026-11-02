@@ -19,6 +19,12 @@ use CryptoSm\Utils\Hex;
  */
 class Pem
 {
+    /** Maximum accepted PEM input size; SM2 key encodings are only a few hundred bytes. */
+    private const MAX_PEM_INPUT_BYTES = 16384;
+
+    /** Maximum accepted DER key input size, matching the PEM armor limit. */
+    private const MAX_DER_KEY_INPUT_BYTES = 16384;
+
     /** SM2 curve OID: 1.2.156.10197.1.301 */
     private const OID_SM2 = '1.2.156.10197.1.301';
 
@@ -161,6 +167,7 @@ class Pem
      */
     public static function importPrivateKeyFromDer(string $der): array
     {
+        self::validateDerKeyInputSize($der);
         if (strlen($der) < 10) {
             throw new InvalidKeyException('Invalid DER data: too short');
         }
@@ -210,11 +217,19 @@ class Pem
      */
     public static function importPublicKeyFromDer(string $der): string
     {
+        self::validateDerKeyInputSize($der);
         if (strlen($der) < 10) {
             throw new InvalidKeyException('Invalid DER data: too short');
         }
 
         return self::parseSubjectPublicKeyInfo($der);
+    }
+
+    private static function validateDerKeyInputSize(string $der): void
+    {
+        if (strlen($der) > self::MAX_DER_KEY_INPUT_BYTES) {
+            throw new InvalidKeyException('Invalid DER data: exceeds maximum key input size');
+        }
     }
 
     // ─── DER Encoding Helpers ─────────────────────────────────────────────
@@ -255,6 +270,7 @@ class Pem
         if (!preg_match('/^[0-9a-fA-F]{64}$/', $privateKey)) {
             throw new InvalidKeyException('Private key must be 64 hex chars');
         }
+        Sm2::validatePrivateKey($privateKey);
         $privKeyBytes = hex2bin($privateKey);
         if ($privKeyBytes === false) {
             throw new InvalidKeyException('Invalid private key hex');
@@ -270,6 +286,7 @@ class Pem
             if (!preg_match('/^[0-9a-fA-F]{128}$/', $publicKey)) {
                 throw new InvalidKeyException('Public key must be 128 hex chars');
             }
+            self::validateImportedKeyPair($privateKey, $publicKey);
             $bitString = self::encodeBitStringPoint($publicKey);
             $pubKeyCtx = "\xa1" . self::encodeDerLength(strlen($bitString)) . $bitString;
         }
@@ -290,6 +307,7 @@ class Pem
         if (!preg_match('/^[0-9a-fA-F]{64}$/', $privateKey)) {
             throw new InvalidKeyException('Private key must be 64 hex chars');
         }
+        Sm2::validatePrivateKey($privateKey);
         $privKeyBytes = hex2bin($privateKey);
         if ($privKeyBytes === false) {
             throw new InvalidKeyException('Invalid private key hex');
@@ -297,10 +315,13 @@ class Pem
 
         $version = "\x02\x01\x00"; // INTEGER 0
 
-        // Inner SEC1 structure: SEQUENCE { INTEGER 1, OCTET STRING <key> }
+        // RFC 5915 ECPrivateKey parameters must be included, even though the
+        // curve is also identified by the outer PKCS#8 AlgorithmIdentifier.
         $sec1Version = "\x02\x01\x01";
         $sec1KeyOctet = "\x04" . self::encodeDerLength(strlen($privKeyBytes)) . $privKeyBytes;
-        $sec1Content = $sec1Version . $sec1KeyOctet;
+        $curveOid = self::encodeOid(self::OID_SM2);
+        $curveCtx = "\xa0" . self::encodeDerLength(strlen($curveOid)) . $curveOid;
+        $sec1Content = $sec1Version . $sec1KeyOctet . $curveCtx;
         $sec1Seq = "\x30" . self::encodeDerLength(strlen($sec1Content)) . $sec1Content;
 
         $content = $version . self::buildAlgorithmIdentifier()
@@ -319,6 +340,9 @@ class Pem
     {
         if (!preg_match('/^[0-9a-fA-F]{128}$/', $publicKey)) {
             throw new InvalidKeyException('Public key must be 128 hex chars');
+        }
+        if (!Sm2::isOnCurve($publicKey)) {
+            throw new InvalidKeyException('Invalid public key: not on SM2 curve');
         }
         $content = self::buildAlgorithmIdentifier() . self::encodeBitStringPoint($publicKey);
         return "\x30" . self::encodeDerLength(strlen($content)) . $content;
@@ -380,9 +404,15 @@ class Pem
 
     private static function pemToDer(string $pem): string
     {
-        // Require a well-formed, matching BEGIN/END pair; anything outside the
-        // armor boundaries is ignored per common PEM practice.
-        if (!preg_match('/-----BEGIN ([^-]+)-----(.*?)-----END \1-----/s', $pem, $m)) {
+        // Bound regex, whitespace-stripping, and Base64 work on untrusted input.
+        if (strlen($pem) > self::MAX_PEM_INPUT_BYTES) {
+            return '';
+        }
+
+        // Key import must consume exactly one PEM object. Ignoring arbitrary
+        // prefix/suffix bytes or a second armor block makes the selected key
+        // depend on which PEM parser a caller uses for the same input.
+        if (!preg_match('/\A\s*-----BEGIN ([^-]+)-----(.*?)-----END \1-----\s*\z/s', $pem, $m)) {
             return '';
         }
         $body = preg_replace('/\s+/', '', $m[2]) ?? '';
@@ -395,7 +425,7 @@ class Pem
 
     private static function getPemLabel(string $pem): string
     {
-        if (preg_match('/-----BEGIN ([^-]+)-----/', $pem, $m)) {
+        if (preg_match('/\A\s*-----BEGIN ([^-]+)-----/', $pem, $m)) {
             return $m[1];
         }
         return '';
@@ -406,11 +436,15 @@ class Pem
     /**
      * Parse DER length at offset.
      *
+     * Key structures stay bounded to four length octets; ciphertext parsing may
+     * need longer DER lengths because GM/T's KDF permits C2 values above 4 GiB.
+     *
+     * @param  bool            $allowLongLengths Allow up to PHP_INT_SIZE length octets
      * @return array{int, int} [length, newOffset]
      */
-    private static function parseDerLength(string $data, int $offset): array
+    private static function parseDerLength(string $data, int $offset, bool $allowLongLengths = false): array
     {
-        if ($offset >= strlen($data)) {
+        if ($offset < 0 || $offset >= strlen($data)) {
             throw new InvalidKeyException('Invalid DER: unexpected end of length field');
         }
         $byte = ord($data[$offset]);
@@ -421,7 +455,9 @@ class Pem
         if ($numBytes === 0) {
             throw new InvalidKeyException('Invalid DER: indefinite length is not allowed');
         }
-        if ($numBytes > 4 || $offset + 1 + $numBytes > strlen($data)) {
+        $dataLength = strlen($data);
+        $maxLengthBytes = $allowLongLengths ? PHP_INT_SIZE : 4;
+        if ($numBytes > $maxLengthBytes || $numBytes > $dataLength - $offset - 1) {
             throw new InvalidKeyException('Invalid DER: length field too long');
         }
         if ($numBytes > 1 && ord($data[$offset + 1]) === 0x00) {
@@ -429,12 +465,23 @@ class Pem
         }
         $len = 0;
         for ($i = 0; $i < $numBytes; $i++) {
-            $len = ($len << 8) | ord($data[$offset + 1 + $i]);
+            $byte = ord($data[$offset + 1 + $i]);
+            if ($len > intdiv(PHP_INT_MAX - $byte, 256)) {
+                throw new InvalidKeyException('Invalid DER: length exceeds supported integer range');
+            }
+            $len = $len * 256 + $byte;
         }
         if ($len < 128) {
             throw new InvalidKeyException('Invalid DER: non-minimal length encoding');
         }
-        return [$len, $offset + 1 + $numBytes];
+        if ($numBytes === 1 && ord($data[$offset + 1]) < 0x80) {
+            throw new InvalidKeyException('Invalid DER: non-minimal length encoding');
+        }
+        $newOffset = $offset + 1 + $numBytes;
+        if ($len > strlen($data) - $newOffset) {
+            throw new InvalidKeyException('Invalid DER: length exceeds available data');
+        }
+        return [$len, $newOffset];
     }
 
     /**
@@ -460,12 +507,23 @@ class Pem
 
         $subIdentifiers = [];
         $value = 0;
+        $atComponentStart = true;
         for ($i = 0; $i < strlen($oidBytes); $i++) {
             $byte = ord($oidBytes[$i]);
-            $value = ($value << 7) | ($byte & 0x7F);
+            if ($atComponentStart && $byte === 0x80) {
+                throw new InvalidKeyException('Invalid DER: non-minimal OID component');
+            }
+            $payload = $byte & 0x7F;
+            if ($value > intdiv(PHP_INT_MAX - $payload, 128)) {
+                throw new InvalidKeyException('Invalid DER: OID component exceeds supported range');
+            }
+            $value = $value * 128 + $payload;
             if (($byte & 0x80) === 0) {
                 $subIdentifiers[] = $value;
                 $value = 0;
+                $atComponentStart = true;
+            } else {
+                $atComponentStart = false;
             }
         }
         if ((ord($oidBytes[strlen($oidBytes) - 1]) & 0x80) !== 0) {
@@ -497,7 +555,7 @@ class Pem
      */
     private static function parseSec1PrivateKey(string $der): array
     {
-        return self::parseSec1Structure($der, 'Invalid SEC1 private key');
+        return self::parseSec1Structure($der, 'Invalid SEC1 private key', true);
     }
 
     /**
@@ -511,7 +569,7 @@ class Pem
      * @param  string                                       $errorPrefix Prefix used in format-specific error messages
      * @return array{privateKey: string, publicKey: string}
      */
-    private static function parseSec1Structure(string $der, string $errorPrefix): array
+    private static function parseSec1Structure(string $der, string $errorPrefix, bool $requireCurveParameters): array
     {
         $prefix = $errorPrefix . ': ';
         $offset = 0;
@@ -546,14 +604,19 @@ class Pem
         }
         $privateKeyBin = substr($der, $offset, $keyLen);
         $offset += $keyLen;
-        if ($keyLen < 1 || $keyLen > 32) {
-            throw new InvalidKeyException($prefix . 'invalid private key length');
+        // RFC 5915 ECPrivateKey.privateKey is I2OSP encoded to the curve
+        // order width. SM2 uses a 256-bit order, so accepting a shorter
+        // OCTET STRING and left-padding it would admit a non-canonical key
+        // encoding that other DER consumers reject.
+        if ($keyLen !== 32) {
+            throw new InvalidKeyException($prefix . 'invalid private key length (expected 32 bytes)');
         }
 
         $privateKey = str_pad(bin2hex($privateKeyBin), 64, '0', STR_PAD_LEFT);
         Sm2::validatePrivateKey($privateKey);
 
         $publicKey = '';
+        $hasCurveParameters = false;
         if ($offset < $seqEnd) {
             $tag = ord($der[$offset]);
             if ($tag === 0xA0) {
@@ -571,7 +634,11 @@ class Pem
                     throw new InvalidKeyException($prefix . 'invalid curve parameters');
                 }
                 $offset = $ctxEnd;
+                $hasCurveParameters = true;
             }
+        }
+        if ($requireCurveParameters && !$hasCurveParameters) {
+            throw new InvalidKeyException($prefix . 'missing required SM2 curve parameters');
         }
         if ($offset < $seqEnd) {
             $tag = ord($der[$offset]);
@@ -718,19 +785,16 @@ class Pem
             throw new InvalidKeyException('Invalid PKCS8 private key: trailing data');
         }
 
-        if (strlen($innerDer) > 0 && ord($innerDer[0]) === 0x30) {
-            return self::parseSec1PrivateKeyInner($innerDer);
+        // RFC 5915 requires PKCS#8 EC privateKey contents to be an
+        // ECPrivateKey structure, whose scalar is a fixed-width I2OSP value.
+        // Do not reinterpret a bare OCTET STRING as a private scalar: that
+        // non-standard form is rejected by other PKCS#8 consumers and creates
+        // parser differentials for the same key container.
+        if (strlen($innerDer) <= 32 || ord($innerDer[0]) !== 0x30) {
+            throw new InvalidKeyException('Invalid PKCS8 private key: expected SEC1 ECPrivateKey structure');
         }
 
-        $privateKeyBin = $innerDer;
-        if (strlen($privateKeyBin) < 1 || strlen($privateKeyBin) > 32) {
-            throw new InvalidKeyException('Invalid PKCS8 private key length');
-        }
-        $privateKey = str_pad(bin2hex($privateKeyBin), 64, '0', STR_PAD_LEFT);
-        Sm2::validatePrivateKey($privateKey);
-        $publicKey = Sm2::getPublicKey($privateKey);
-
-        return ['privateKey' => $privateKey, 'publicKey' => $publicKey];
+        return self::parseSec1PrivateKeyInner($innerDer);
     }
 
     /**
@@ -743,7 +807,7 @@ class Pem
      */
     private static function parseSec1PrivateKeyInner(string $der): array
     {
-        return self::parseSec1Structure($der, 'Invalid SEC1 inner');
+        return self::parseSec1Structure($der, 'Invalid SEC1 inner', false);
     }
 
     private static function validateImportedKeyPair(string $privateKey, string $publicKey): void
@@ -823,7 +887,11 @@ class Pem
         }
         $pointTag = ord($pointData[0]);
         if ($pointTag === 0x02 || $pointTag === 0x03) {
-            $publicKey = Sm2::decompressPublicKey(bin2hex(substr($pointData, 1)), $pointTag);
+            try {
+                $publicKey = Sm2::decompressPublicKey(bin2hex(substr($pointData, 1)), $pointTag);
+            } catch (\CryptoSm\Exception\CryptoException $e) {
+                throw new InvalidKeyException('Invalid public key: ' . $e->getMessage(), 0, $e);
+            }
             if (!Sm2::isOnCurve($publicKey)) {
                 throw new InvalidKeyException('Invalid public key: decompressed point not on SM2 curve');
             }
@@ -847,7 +915,7 @@ class Pem
         return $publicKey;
     }
 
-    // ─── SM2 密文 ASN.1 格式（GM/T 0009-2012）────────────────────────────
+    // ─── SM2 密文 ASN.1 格式（GM/T 0009-2023）────────────────────────────
 
     /**
      * Export an SM2 ciphertext in GM/T 0009 ASN.1 DER format.
@@ -859,29 +927,47 @@ class Pem
      *     cipherText   OCTET STRING
      * }
      *
-     * @param  string              $ciphertextHex Internal hex ciphertext (C1C3C2 or C1C2C3)
+     * @param  string              $ciphertextHex Internal hex ciphertext (C1C3C2 or C1C2C3), with optional SEC1 04 prefix
      * @param  int                 $mode          Sm2::CIPHER_MODE_1 (C1C3C2) or Sm2::CIPHER_MODE_0 (C1C2C3)
      * @return string              DER-encoded binary
      * @throws InvalidKeyException If ciphertext format is invalid
      */
     public static function exportCiphertextAsn1(string $ciphertextHex, int $mode = Sm2::CIPHER_MODE_1): string
     {
-        $c1Len = 128; // x||y, uncompressed point without 04 prefix
+        if ($mode !== Sm2::CIPHER_MODE_0 && $mode !== Sm2::CIPHER_MODE_1) {
+            throw new InvalidKeyException('Cipher mode must be Sm2::CIPHER_MODE_0 or Sm2::CIPHER_MODE_1');
+        }
+        $rawPointIsValid = Sm2::isOnCurve(substr($ciphertextHex, 0, 128));
+        $prefixedPointIsValid = str_starts_with(strtolower($ciphertextHex), '04')
+            && strlen($ciphertextHex) >= 194
+            && Sm2::isOnCurve(substr($ciphertextHex, 2, 128));
+        if ($rawPointIsValid && $prefixedPointIsValid) {
+            throw new InvalidKeyException('Ciphertext C1 point encoding is ambiguous');
+        }
+        $hasPointPrefix = $prefixedPointIsValid;
+        $c1Len = $hasPointPrefix ? 130 : 128;
         $hashLen = 64; // SM3 output, 32 bytes
         if (strlen($ciphertextHex) < $c1Len + $hashLen) {
             throw new InvalidKeyException('Ciphertext too short for SM2 format');
         }
-        $x1 = substr($ciphertextHex, 0, 64);
-        $y1 = substr($ciphertextHex, 64, 64);
+        $pointHex = substr($ciphertextHex, $hasPointPrefix ? 2 : 0, 128);
+        $x1 = substr($pointHex, 0, 64);
+        $y1 = substr($pointHex, 64, 64);
         if ($mode === Sm2::CIPHER_MODE_0) {
-            $c2 = substr($ciphertextHex, 128, -64);
+            $c2 = substr($ciphertextHex, $c1Len, -64);
             $c3 = substr($ciphertextHex, -64);
         } else {
-            $c3 = substr($ciphertextHex, 128, 64);
-            $c2 = substr($ciphertextHex, 192);
+            $c3 = substr($ciphertextHex, $c1Len, 64);
+            $c2 = substr($ciphertextHex, $c1Len + 64);
         }
-        if (!preg_match('/^[0-9a-fA-F]+$/', $x1) || !preg_match('/^[0-9a-fA-F]+$/', $y1)) {
+        if (!preg_match('/\A[0-9a-fA-F]+\z/', $x1) || !preg_match('/\A[0-9a-fA-F]+\z/', $y1)) {
             throw new InvalidKeyException('Ciphertext C1 is not valid hex');
+        }
+        if (!preg_match('/\A[0-9a-fA-F]{64}\z/', $c3) || !preg_match('/\A(?:[0-9a-fA-F]{2})+\z/', $c2)) {
+            throw new InvalidKeyException('Ciphertext C2/C3 is not valid hex');
+        }
+        if (!Sm2::isOnCurve($x1 . $y1)) {
+            throw new InvalidKeyException('Ciphertext C1 point is not on SM2 curve');
         }
 
         // Strip leading zero bytes from coordinates for DER INTEGER encoding,
@@ -931,12 +1017,15 @@ class Pem
      */
     public static function importCiphertextAsn1(string $der, int $mode = Sm2::CIPHER_MODE_1): string
     {
+        if ($mode !== Sm2::CIPHER_MODE_0 && $mode !== Sm2::CIPHER_MODE_1) {
+            throw new InvalidKeyException('Cipher mode must be Sm2::CIPHER_MODE_0 or Sm2::CIPHER_MODE_1');
+        }
         $offset = 0;
         if ($offset >= strlen($der) || ord($der[$offset]) !== 0x30) {
             throw new InvalidKeyException('Invalid SM2 cipher ASN.1: expected SEQUENCE');
         }
         $offset++;
-        [$seqLen, $offset] = self::parseDerLength($der, $offset);
+        [$seqLen, $offset] = self::parseDerLength($der, $offset, true);
         $seqEnd = $offset + $seqLen;
         if ($seqEnd !== strlen($der)) {
             throw new InvalidKeyException('Invalid SM2 cipher ASN.1: trailing data');
@@ -947,31 +1036,33 @@ class Pem
             throw new InvalidKeyException('Invalid SM2 cipher ASN.1: expected x INTEGER');
         }
         $offset++;
-        [$xLen, $offset] = self::parseDerLength($der, $offset);
+        [$xLen, $offset] = self::parseDerLength($der, $offset, true);
         if ($offset + $xLen > $seqEnd || $xLen < 1 || $xLen > 33) {
             throw new InvalidKeyException('Invalid SM2 cipher ASN.1: invalid x length');
         }
         $x1Bin = substr($der, $offset, $xLen);
         $offset += $xLen;
+        self::validateSm2CoordinateInteger($x1Bin, 'x');
 
         // Parse y1 INTEGER
         if ($offset >= strlen($der) || ord($der[$offset]) !== 0x02) {
             throw new InvalidKeyException('Invalid SM2 cipher ASN.1: expected y INTEGER');
         }
         $offset++;
-        [$yLen, $offset] = self::parseDerLength($der, $offset);
+        [$yLen, $offset] = self::parseDerLength($der, $offset, true);
         if ($offset + $yLen > $seqEnd || $yLen < 1 || $yLen > 33) {
             throw new InvalidKeyException('Invalid SM2 cipher ASN.1: invalid y length');
         }
         $y1Bin = substr($der, $offset, $yLen);
         $offset += $yLen;
+        self::validateSm2CoordinateInteger($y1Bin, 'y');
 
         // Parse hash OCTET STRING
         if ($offset >= strlen($der) || ord($der[$offset]) !== 0x04) {
             throw new InvalidKeyException('Invalid SM2 cipher ASN.1: expected hash OCTET STRING');
         }
         $offset++;
-        [$hLen, $offset] = self::parseDerLength($der, $offset);
+        [$hLen, $offset] = self::parseDerLength($der, $offset, true);
         if ($hLen !== 32) {
             throw new InvalidKeyException('Invalid SM2 cipher ASN.1: hash must be 32 bytes');
         }
@@ -983,7 +1074,10 @@ class Pem
             throw new InvalidKeyException('Invalid SM2 cipher ASN.1: expected cipherText OCTET STRING');
         }
         $offset++;
-        [$ctLen, $offset] = self::parseDerLength($der, $offset);
+        [$ctLen, $offset] = self::parseDerLength($der, $offset, true);
+        if ($ctLen === 0) {
+            throw new InvalidKeyException('Invalid SM2 cipher ASN.1: cipherText must not be empty');
+        }
         if ($offset + $ctLen !== $seqEnd) {
             throw new InvalidKeyException('Invalid SM2 cipher ASN.1: cipherText length mismatch');
         }
@@ -1008,5 +1102,17 @@ class Pem
             return strtolower($c1 . $c2 . $c3);
         }
         return strtolower($c1 . $c3 . $c2);
+    }
+
+    /** Validate DER's minimal, non-negative INTEGER encoding for an SM2 coordinate. */
+    private static function validateSm2CoordinateInteger(string $value, string $coordinate): void
+    {
+        $first = ord($value[0]);
+        if (($first & 0x80) !== 0) {
+            throw new InvalidKeyException('Invalid SM2 cipher ASN.1: ' . $coordinate . ' INTEGER must be non-negative');
+        }
+        if (strlen($value) > 1 && $first === 0 && (ord($value[1]) & 0x80) === 0) {
+            throw new InvalidKeyException('Invalid SM2 cipher ASN.1: non-minimal ' . $coordinate . ' INTEGER');
+        }
     }
 }

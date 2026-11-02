@@ -71,6 +71,42 @@ class Asn1Test extends TestCase
         $this->assertEquals($sHex, $decodedS);
     }
 
+    public function testMaximumLengthDerSm2SignatureIsAccepted(): void
+    {
+        $rHex = '80' . str_repeat('00', 31);
+        $sHex = $rHex;
+        $der = Asn1::encodeDerSignatureBinary($rHex, $sHex);
+
+        $this->assertSame(72, strlen($der));
+        $this->assertSame([$rHex, $sHex], Asn1::decodeDerSignatureBinary($der));
+        $this->assertSame([$rHex, $sHex], Asn1::decodeDerSignature(bin2hex($der)));
+    }
+
+    public function testDerSm2SignatureDecodersRejectOversizedInputBeforeParsing(): void
+    {
+        try {
+            Asn1::decodeDerSignature(str_repeat('0', 146));
+            $this->fail('Oversized DER signature hex must be rejected');
+        } catch (CryptoException $exception) {
+            $this->assertStringContainsString('exceeds maximum length', $exception->getMessage());
+        }
+
+        try {
+            Asn1::decodeDerSignatureBinary(str_repeat("\0", 73));
+            $this->fail('Oversized DER signature bytes must be rejected');
+        } catch (CryptoException $exception) {
+            $this->assertStringContainsString('exceeds maximum length', $exception->getMessage());
+        }
+    }
+
+    public function testDerSm2SignatureRejectsLengthIntegerBeyondInput(): void
+    {
+        $malformed = "\x30\x84\x80\x00\x00\x00" . str_repeat("\0", 66);
+
+        $this->expectException(CryptoException::class);
+        Asn1::decodeDerSignatureBinary($malformed);
+    }
+
     public function testDecodeDerSignatureInvalidHex(): void
     {
         $this->expectException(CryptoException::class);
@@ -289,8 +325,8 @@ class Asn1Test extends TestCase
     public function testDerSignatureRoundTripWithHighValues(): void
     {
         // r 和 s 值的高位字节 > 0x7f, 需要前导零
-        $rHex = str_repeat('f', 64);
-        $sHex = str_repeat('e', 64);
+        $rHex = '8' . str_repeat('0', 63);
+        $sHex = 'e' . str_repeat('0', 63);
 
         $der = Asn1::encodeDerSignature($rHex, $sHex);
         [$decodedR, $decodedS] = Asn1::decodeDerSignature($der);
@@ -302,7 +338,7 @@ class Asn1Test extends TestCase
     {
         // r 的第一个字节 < 0x80, s 的第一个字节 > 0x80
         $rHex = str_pad('1', 64, '0', STR_PAD_LEFT);
-        $sHex = str_repeat('ff', 32);
+        $sHex = '8' . str_repeat('0', 63);
 
         $der = Asn1::encodeDerSignature($rHex, $sHex);
         [$decodedR, $decodedS] = Asn1::decodeDerSignature($der);
@@ -362,6 +398,29 @@ class Asn1Test extends TestCase
         $this->assertEquals(chr(0x02), $encoded[0]);
         $this->assertEquals(chr(0x81), $encoded[1]); // 长度用1字节表示
         $this->assertEquals(chr(0x80), $encoded[2]); // 长度值 128
+    }
+
+    public function testEncodeLengthRejectsNegativeValue(): void
+    {
+        $this->expectException(CryptoException::class);
+        $this->expectExceptionMessage('length must not be negative');
+        Asn1::encodeLength(-1);
+    }
+
+    public function testDecodeIntegerRejectsNegativeOffset(): void
+    {
+        $offset = -1;
+
+        $this->expectException(CryptoException::class);
+        Asn1::decodeInteger("\x01\x02", $offset);
+    }
+
+    public function testDecodeSequenceRejectsNegativeOffset(): void
+    {
+        $offset = -1;
+
+        $this->expectException(CryptoException::class);
+        Asn1::decodeSequence("\x00\x30", $offset);
     }
 
     // ========================================================================

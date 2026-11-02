@@ -8,6 +8,7 @@ use CryptoSm\Exception\CryptoException;
 use CryptoSm\SM2\KeyExchange;
 use CryptoSm\SM2\SignatureOptions;
 use CryptoSm\SM2\Sm2;
+use CryptoSm\SM2\Sm2CipherOptions;
 use CryptoSm\SM3\Sm3;
 use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
@@ -20,11 +21,13 @@ use PHPUnit\Framework\TestCase;
  * - GM/T 0002-2012 《SM4分组密码算法》 附录A（单块 + 百万轮迭代示例）
  * - GM/T 0004-2012 《SM3密码杂凑算法》 附录A（运算示例一/二；
  *   数值另经 GmSSL 官方文档交叉确认）
+ * - GM/T 0003.2-2012 《SM2椭圆曲线公钥密码算法 第2部分：数字签名算法》附录A
+ *   （签名与验证完整示例）
+ * - GM/T 0003.4-2012 《SM2椭圆曲线公钥密码算法 第4部分：公钥加密算法》附录A
+ *   （消息加解密示例）
  * - GM/T 0003.5-2012 《SM2椭圆曲线公钥密码算法 第5部分：参数定义》
  *   · 第4章：曲线参数（p/a/b/Gx/Gy/n）
- *   · 附录A：数字签名与验证示例（含 e、r、s 与 Z_A）
  *   · 附录A.2：椭圆曲线点乘示例（4 组中的前 3 组纯标量乘）
- *   · 附录C：消息加解密示例（C1/C3/C2 与明文）
  * - RFC 8998 Appendix A.1：SM4-GCM 官方向量（见 GcmReferenceModelTest）
  *
  * 本文件的定位：与既有自洽性测试互补，提供"外部权威数值锚点"，
@@ -79,6 +82,8 @@ class NationalStandardConformanceTest extends TestCase
 
     // ─── GM/T 0002-2012 附录A：SM4 运算示例 ──────────────────────────────
 
+    /** @runInSeparateProcess */
+    #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
     public function testSm4StandardSingleBlock(): void
     {
         // 明文/密钥 = 0123456789ABCDEFFEDCBA9876543210
@@ -126,12 +131,13 @@ class NationalStandardConformanceTest extends TestCase
             . 'bc3736a2f4f6779c59bdcee36b692153d0a9877cc62a474002df32e52139f0a0';
     }
 
-    // ─── GM/T 0003.5-2012 附录A：数字签名示例（公式级复算）────────────────
+    // ─── 独立固定值签名回归向量（非 GM/T 0003.2 附录A）───────────────────
 
     /**
-     * 官方值（附录A）：
-     *   ID_A = 默认 '1234567812345678'（GM/T 0009-2012；经本库实测裁决：
-     *          以该 ID 复算的 r/s 与附录一致，ALICE123@YAHOO.COM 不匹配）
+     * 固定值回归向量，使用推荐曲线和默认 ID。它不对应 GM/T 0003.2-2012 附录A；
+     * 官方附录A向量在 testSm2Gmt0003Part2AnnexASignatureVector 中单独核验。
+     *
+     *   ID_A = '1234567812345678'
      *   d_A  = 3945208F7B2144B13F36E38AC6D39F95889393692860B51A42FB81EF4DF7C5B8
      *   P_A  = 09F9DF31...84A6632F6072DA9AD13
      *   M    = "message digest"
@@ -197,9 +203,9 @@ class NationalStandardConformanceTest extends TestCase
         );
     }
 
-    public function testSm2AnnexAOfficialSignatureVerifies(): void
+    public function testSm2FixedSignatureRegressionVectorVerifies(): void
     {
-        // 用官方 (r, s) 直接走库验签路径（覆盖 hash=true 分支与 DER 自动检测入口）
+        // 用固定 (r, s) 走库验签路径（覆盖 hash=true 分支与 DER 自动检测入口）。
         $pub = Sm2::getPublicKey('3945208f7b2144b13f36e38ac6d39f95889393692860b51a42fb81ef4df7c5b8');
         $sig = strtolower('F5A03B0648D2C4630EEAC513E1BB81A15944DA3827D5B74143AC7EACEEE720B3'
             . 'B1B6AA29DF212FD8763182BC0D421CA1BB9038FD1F7F42D4840B69C485BBC1AA');
@@ -210,7 +216,7 @@ class NationalStandardConformanceTest extends TestCase
 
         $this->assertTrue(
             Sm2::doVerifySignature('message digest', $sig, $pub, $opts),
-            'the official Annex A signature must verify'
+            'the fixed signature regression vector must verify'
         );
         // 篡改消息必须失败
         $this->assertFalse(
@@ -218,7 +224,129 @@ class NationalStandardConformanceTest extends TestCase
         );
     }
 
-    // ─── GM/T 0003.5-2012 附录C：消息加解密示例 ───────────────────────────
+    /** @runInSeparateProcess */
+    #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
+    public function testSm2Gmt0003Part2AnnexASignatureVector(): void
+    {
+        // GM/T 0003.2-2012 附录A的 Fp-256 示例使用 ALICE123@YAHOO.COM，
+        // 私钥 128B...，随机数 6CB2...，并非推荐曲线上的另一组常见示例。
+        $curve = [
+            'p'  => '8542d69e4c044f18e8b92435bf6ff7de457283915c45517d722edb8b08f1dfc3',
+            'a'  => '787968b4fa32c3fd2417842e73bbfeff2f3c848b6831d7e0ec65228b3937e498',
+            'b'  => '63e4c6d3b23b0c849cf84241484bfe48f61d59a5b16ba06e6e12d1da27c5249a',
+            'n'  => '8542d69e4c044f18e8b92435bf6ff7dd297720630485628d5ae74ee7c32e79b7',
+            'gX' => '421debd61b62eab6746434ebc3cc315e32220b3badd50bdc4c4e6c147fedd43d',
+            'gY' => '0680512bcbb42c07d47349d2153b70c4e5d7fdfcbfa36ea1a85841b9e46e09a2',
+        ];
+        Sm2CurveTestOverride::use($curve);
+
+        try {
+            $privateKey = bin2hex(pack(
+                'C*',
+                0x12,
+                0x8b,
+                0x2f,
+                0xa8,
+                0xbd,
+                0x43,
+                0x3c,
+                0x6c,
+                0x06,
+                0x8c,
+                0x8d,
+                0x80,
+                0x3d,
+                0xff,
+                0x79,
+                0x79,
+                0x2a,
+                0x51,
+                0x9a,
+                0x55,
+                0x17,
+                0x1b,
+                0x1b,
+                0x65,
+                0x0c,
+                0x23,
+                0x66,
+                0x1d,
+                0x15,
+                0x89,
+                0x72,
+                0x63
+            ));
+            $publicKey = Sm2::getPublicKey($privateKey);
+            $expectedPublicKey = '0ae4c7798aa0f119471bee11825be46202bb79e2a5844495e97c04ff4df2548a'
+                . '7c0240f88f1cd4e16352a73c17b7f16f07353e53a176d684a9fe0c6bb798e857';
+            $this->assertSame($expectedPublicKey, strtolower($publicKey), 'official P_A mismatch');
+
+            $ida = 'ALICE123@YAHOO.COM';
+            $z = Sm2::getUserIdDigest($ida, $publicKey);
+            $this->assertSame(
+                'f4a38489e32b45b6f876e3ac2168ca392362dc8f23459c1d1146fc3dbfb7bc9a',
+                $z,
+                'official Z_A mismatch'
+            );
+
+            $e = Sm3::sm3(hex2bin($z) . 'message digest');
+            $this->assertSame(
+                'b524f552cd82b8b028476e005c377fb19a87e6fc682d48bb5d42e3d9b9effe76',
+                $e,
+                'official e mismatch'
+            );
+
+            $k = '6cb28d99385c175c94f94e934817663fc176d925dd72b727260dbaae1fb2f96f';
+            $point = Sm2::pointMultiplyPublic($curve['gX'] . $curve['gY'], $k);
+            $this->assertSame(
+                '110fcda57615705d5e7b9324ac4b856d23e6d9188b2ae47759514657ce25d112'
+                    . '1c65d68a4a08601df24b431e0cab4ebe084772b3817e85811a8510b2df7eca1a',
+                strtolower($point),
+                'official [k]G mismatch'
+            );
+
+            $n = gmp_init($curve['n'], 16);
+            $d = gmp_init($privateKey, 16);
+            $kGmp = gmp_init($k, 16);
+            $eGmp = gmp_init($e, 16);
+            $x1 = gmp_init(substr($point, 0, 64), 16);
+            $r = gmp_mod(gmp_add($eGmp, $x1), $n);
+            $this->assertSame(
+                '40f1ec59f793d9f49e09dcef49130d4194f79fb1eed2caa55bacdb49c4e755d1',
+                str_pad(gmp_strval($r, 16), 64, '0', STR_PAD_LEFT),
+                'official r formula mismatch'
+            );
+            $dPlusOneInverse = gmp_invert(gmp_add($d, 1), $n);
+            self::assertInstanceOf(\GMP::class, $dPlusOneInverse);
+            $s = gmp_mod(
+                gmp_mul($dPlusOneInverse, gmp_sub($kGmp, gmp_mul($r, $d))),
+                $n
+            );
+            $this->assertSame(
+                '6fc6dac32c5d5cf10c77dfb20f7c2eb667a457872fb09ec56327a67ec7deebe7',
+                str_pad(gmp_strval($s, 16), 64, '0', STR_PAD_LEFT),
+                'official s formula mismatch'
+            );
+
+            $signature = strtolower(
+                '40f1ec59f793d9f49e09dcef49130d4194f79fb1eed2caa55bacdb49c4e755d1'
+                    . '6fc6dac32c5d5cf10c77dfb20f7c2eb667a457872fb09ec56327a67ec7deebe7'
+            );
+            $options = (new SignatureOptions())->setUserId($ida)->setPublicKey($publicKey);
+            $this->assertTrue(
+                Sm2::doVerifySignature('message digest', $signature, $publicKey, $options),
+                'the signature from GM/T 0003.2 Annex A must verify'
+            );
+            $this->assertFalse(
+                Sm2::doVerifySignature('message digests', $signature, $publicKey, $options),
+                'the Annex A signature must reject a modified message'
+            );
+        } finally {
+            Sm2CurveTestOverride::reset();
+        }
+    }
+
+    // ─── GM/T 0003.4-2012 附录A：消息加解密示例 ───────────────────────────
 
     // ─── GM/T 0003.3-2012 附录A：密钥交换示例（存档说明）──────────────────
 
@@ -250,8 +378,9 @@ class NationalStandardConformanceTest extends TestCase
      *
      * 该示例使用 GM/T 0003.5-2012 附录B 的第二示例曲线
      * （p = SM2 主阶 n），而非主推荐曲线 sm2p256v1。
-     * 通过 Sm2::useCurveParams() 临时注入参数以在该曲线上执行。
+     * 通过测试专用反射夹具临时注入参数以在该曲线上执行。
      */
+    /** @runInSeparateProcess */
     #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
     public function testSm2KeyExchangeAnnexA(): void
     {
@@ -264,12 +393,12 @@ class NationalStandardConformanceTest extends TestCase
             'gY' => '0680512bcbb42c07d47349d2153b70c4e5d7fdfcbfa36ea1a85841b9e46e09a2',
         ];
 
-        Sm2::useCurveParams($testCurve);
+        Sm2CurveTestOverride::use($testCurve);
         try {
             // 官方值（GM/T 0003.3-2012 附录A / GM/T 0003.5-2012 附录A）
             $dA  = '6fcba2ef9ae0ab902bc3bde3ff915d44ba4cc78f88e2f8e7f8996d3b8cceedee';
             $rA  = '83a2c9c8b96e5af70bd480b472409a9a327257f1ebb73f5b073354b248668563';
-            $dB  = '05e1e2ec96f9210f73146554bb2dbb1bbeee72a06cdb55eb9ee97bdcb37a91af';
+            $dB  = '5e35d7d3f3c54dbac72e61819e730b019a84208ca3a35e4c2e353dfccb2a3b53';
             $rB  = '33fe21940342161c55619c4a0c060293d543c80af19748ce176d83477de71c80';
             $ida = 'ALICE123@YAHOO.COM';
             $idb = 'BILL456@YAHOO.COM';
@@ -299,64 +428,181 @@ class NationalStandardConformanceTest extends TestCase
                 'initiator and responder must derive the same shared secret'
             );
 
-            // 官方值验证（已通过独立脚本确认 initiator 输出 = 官方值）：
-            // GM/T 0003.5-2012 附录A 共享密钥 = 55B0AC62A6B927BA23703832C853DED4
-            // 本库在独立进程中运行时输出完全一致；PHPUnit 套件内因静态
-            // 缓存跨测试残留可能导致偏差，已在独立验证中确认正确性。
+            $this->assertSame(
+                $expectedKey,
+                hex2bin($keyA),
+                'initiator key must match the official GM/T 0003.3 Annex A vector'
+            );
+            $this->assertSame(
+                $expectedKey,
+                hex2bin($keyB),
+                'responder key must match the official GM/T 0003.3 Annex A vector'
+            );
+
+            $fullA = KeyExchange::initiatorComputeKeyFull(
+                $dA,
+                $rA,
+                Sm2::getPublicKey($dB),
+                Sm2::getPublicKey($rB),
+                $klen,
+                $ida,
+                $idb
+            );
+            $confirmationInputs = [
+                $fullA['xV'],
+                $fullA['yV'],
+                $ida,
+                $idb,
+                Sm2::getPublicKey($rA),
+                Sm2::getPublicKey($rB),
+                Sm2::getPublicKey($dA),
+                Sm2::getPublicKey($dB),
+            ];
+            $this->assertSame(
+                '284c8f198f141b502e81250f1581c7e9eeb4ca6990f9e02df388b45471f5bc5c',
+                KeyExchange::computeResponderConfirmation(...$confirmationInputs),
+                'responder S_B (0x02) must match the official vector'
+            );
+            $this->assertSame(
+                '23444daf8ed7534366cb901c84b3bdbb63504f4065c1116c91a4c00697e6cf7a',
+                KeyExchange::computeInitiatorConfirmation(...$confirmationInputs),
+                'initiator S_A (0x03) must match the official vector'
+            );
+
             $keyBytes = hex2bin(substr($keyA, 0, 32));
             $this->assertIsString($keyBytes);
             $this->assertSame(16, strlen($keyBytes), 'derived key must be exactly klen bytes');
         } finally {
-            Sm2::resetCurveParams();
+            Sm2CurveTestOverride::reset();
         }
     }
 
-    public function testSm2AnnexCDecryptionRecoversOfficialPlaintext(): void
+    /** @runInSeparateProcess */
+    #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
+    public function testSm2AnnexAOfficialEncryptionVectorDecrypts(): void
     {
-        // 官方值：d_A=1649AB77..., k=59276E27..., M="encryption standard"
-        // C1 = [k]G = (04EBFC71..., E858F9D8...)（与附录A.2 第一组一致）
-        $dA = '1649ab77a00637bd5e2efe283fbf353534aa7f7cb89463f208ddbc2920bb0da0';
-        $c1 = '04ebfc718e8d1798620432268e77feb6415e2ede0e073c0f4f640ecd2e149a73'
-            . 'e858f9d81e5430a57b36daab8f950a3c64e6ee6a63094d99283aff767e124df0';
-        $plaintext = 'encryption standard';
+        // GM/T 0003.4-2012 附录 A 示例 2：该示例使用标准文本给出的第二条 Fp-256 曲线。
+        $curve = [
+            'p' => '8542d69e4c044f18e8b92435bf6ff7de457283915c45517d722edb8b08f1dfc3',
+            'a' => '787968b4fa32c3fd2417842e73bbfeff2f3c848b6831d7e0ec65228b3937e498',
+            'b' => '63e4c6d3b23b0c849cf84241484bfe48f61d59a5b16ba06e6e12d1da27c5249a',
+            'n' => '8542d69e4c044f18e8b92435bf6ff7dd297720630485628d5ae74ee7c32e79b7',
+            'gX' => '421debd61b62eab6746434ebc3cc315e32220b3badd50bdc4c4e6c147fedd43d',
+            'gY' => '0680512bcbb42c07d47349d2153b70c4e5d7fdfcbfa36ea1a85841b9e46e09a2',
+        ];
+        Sm2CurveTestOverride::use($curve);
+        try {
+            $privateKey = bin2hex(pack(
+                'C*',
+                0x16,
+                0x49,
+                0xab,
+                0x77,
+                0xa0,
+                0x06,
+                0x37,
+                0xbd,
+                0x5e,
+                0x2e,
+                0xfe,
+                0x28,
+                0x3f,
+                0xbf,
+                0x35,
+                0x35,
+                0x34,
+                0xaa,
+                0x7f,
+                0x7c,
+                0xb8,
+                0x94,
+                0x63,
+                0xf2,
+                0x08,
+                0xdd,
+                0xbc,
+                0x29,
+                0x20,
+                0xbb,
+                0x0d,
+                0xa0
+            ));
+            $nonce = '4c62eefd6ecfc2b95b92fd6c3d9575148afa17425546d49018e5388d49dd7b4f';
+            $generator = $curve['gX'] . $curve['gY'];
+            $c1 = Sm2::pointMultiplyPublic($generator, $nonce);
+            $this->assertSame(
+                '245c26fb68b1ddddb12c4b6bf9f2b6d5fe60a383b0d18d1c4144abf17f6252e7'
+                    . '76cb9264c2a7e88e52b19903fdc47378f605e36811f5c07423a24b84400f01b8',
+                strtolower($c1),
+                'C1 must match GM/T 0003.4-2012 Annex A'
+            );
 
-        // 以官方 C1 重构一份合法 C1C3C2 密文（GM/T 0003.4）：
-        // x2||y2 = [d_A]C1；t = KDF(x2||y2, klen)；C2 = M ⊕ t；C3 = SM3(x2 || M || y2)
-        $x2y2 = Sm2::pointMultiplyPublic($c1, $dA);
-        $x2 = hex2bin(substr($x2y2, 0, 64));
-        $y2 = hex2bin(substr($x2y2, 64, 64));
-        self::assertIsString($x2);
-        self::assertIsString($y2);
-        $kdf = new \ReflectionMethod(Sm2::class, 'kdf');
-        $kdf->setAccessible(true);
-        $tResult = $kdf->invoke(null, $x2y2, strlen($plaintext));
-        self::assertIsString($tResult);
-        $t = $tResult;
-        $c2Bin = $plaintext ^ $t;
-        $c3 = Sm3::sm3($x2 . $plaintext . $y2);
+            // Fixed standard C3 and C2 make this independent of the library KDF/hash output.
+            // GM/T 0003.4-2012 Annex A serializes C1 || C2 || C3 and C1 as 04 || x || y.
+            $ciphertext = '04' . $c1
+                . '650053a89b41c418b0c3aad00d886c00286467'
+                . '9c3d7360c30156fab7c80a0276712da9d8094a634b766d3a285e07480653426d';
+            $options = (new Sm2CipherOptions())->setCipherMode(Sm2::CIPHER_MODE_0);
+            $this->assertSame(
+                'encryption standard',
+                Sm2::doDecrypt($ciphertext, $privateKey, $options),
+                'the official Annex A ciphertext must decrypt to the standard plaintext'
+            );
 
-        $ciphertext = strtolower($c1 . $c3 . bin2hex($c2Bin)); // 模式1：C1 || C3 || C2（hex）
-
-        $recovered = Sm2::doDecrypt($ciphertext, $dA);
-        $this->assertSame($plaintext, $recovered, 'official Annex C ciphertext must decrypt to the official plaintext');
-
-        // 篡改 C2 一个字节必须失败（C3 校验）
-        $tampered = substr($ciphertext, 0, -2)
-            . (substr($ciphertext, -2) === 'ff' ? '00' : 'ff');
-        $this->expectException(CryptoException::class);
-        Sm2::doDecrypt($tampered, $dA);
+            $tampered = substr($ciphertext, 0, -2)
+                . (substr($ciphertext, -2) === 'ff' ? '00' : 'ff');
+            $this->expectException(CryptoException::class);
+            Sm2::doDecrypt($tampered, $privateKey, $options);
+        } finally {
+            Sm2CurveTestOverride::reset();
+        }
     }
 
     public function testSm2AnnexCEncryptionProducesStandardLayout(): void
     {
-        // 加密方向无法注入固定 k，但输出结构必须符合 GM/T 0003.4：
-        // 本库 hex 布局为 C1(x||y 共 64 字节，不含 04 前缀) || C3(32B) || C2(len(M))
-        $dA = '1649ab77a00637bd5e2efe283fbf353534aa7f7cb89463f208ddbc2920bb0da0';
+        // 加密方向无法注入固定 k；验证 GB/T 32918.4-2016 的 C1||C3||C2 布局，
+        // C1 使用 SEC1 未压缩点编码 04||x||y（65 字节）。
+        $dA = bin2hex(pack(
+            'C*',
+            0x16,
+            0x49,
+            0xab,
+            0x77,
+            0xa0,
+            0x06,
+            0x37,
+            0xbd,
+            0x5e,
+            0x2e,
+            0xfe,
+            0x28,
+            0x3f,
+            0xbf,
+            0x35,
+            0x35,
+            0x34,
+            0xaa,
+            0x7f,
+            0x7c,
+            0xb8,
+            0x94,
+            0x63,
+            0xf2,
+            0x08,
+            0xdd,
+            0xbc,
+            0x29,
+            0x20,
+            0xbb,
+            0x0d,
+            0xa0
+        ));
         $pub = Sm2::getPublicKey($dA);
         $ct = Sm2::doEncrypt('encryption standard', $pub);
 
-        $this->assertSame((64 + 32 + strlen('encryption standard')) * 2, strlen($ct));
-        $this->assertTrue(Sm2::isOnCurve(substr($ct, 0, 128)), 'C1 must be a valid curve point');
+        $this->assertSame((65 + 32 + strlen('encryption standard')) * 2, strlen($ct));
+        $this->assertStringStartsWith('04', $ct);
+        $this->assertTrue(Sm2::isOnCurve(substr($ct, 2, 128)), 'C1 must be a valid curve point');
         $this->assertSame('encryption standard', Sm2::doDecrypt($ct, $dA));
     }
 }

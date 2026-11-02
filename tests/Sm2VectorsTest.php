@@ -83,13 +83,14 @@ class Sm2VectorsTest extends TestCase
         // SM2 签名值为 (r, s)，每个 32 字节 = 64 hex 字符
         $kp = Sm2::generateKeyPairHex();
 
-        // 不带杂凑（hash=false），签名直接对消息签名
+        // 默认使用 SM3(ZA || M) 的标准消息签名流程。
         $sig = Sm2::doSignature('message digest', $kp->getPrivateKey());
         $this->assertEquals(128, strlen($sig), 'SM2 签名应为 128 个十六进制字符（r||s 各 64）');
         $this->assertTrue(ctype_xdigit($sig));
 
-        // 验证签名通过
+        // 验证签名通过；前导 NUL 不得因整数化而与原消息等价。
         $this->assertTrue(Sm2::doVerifySignature('message digest', $sig, $kp->getPublicKey()));
+        $this->assertFalse(Sm2::doVerifySignature("\0message digest", $sig, $kp->getPublicKey()));
     }
 
     public function testSignVerifyWithHashMode(): void
@@ -129,7 +130,7 @@ class Sm2VectorsTest extends TestCase
 
     public function testDefaultUserIdIsStandardValue(): void
     {
-        // GM/T 0009-2012 规定默认 userId = '1234567812345678'
+        // GM/T 0009-2023 第 10 章规定默认 userId = '1234567812345678'
         $opts = new SignatureOptions();
         $this->assertEquals('1234567812345678', $opts->getUserId());
     }
@@ -150,8 +151,8 @@ class Sm2VectorsTest extends TestCase
 
         $resultA = KeyExchange::initiatorComputeKeyFull($dA, $rA, $PB, $RB, 32, $idA, $idB);
         $resultB = KeyExchange::responderComputeKeyFull($dB, $rB, $PA, $RA, 32, $idA, $idB);
-        $s1 = KeyExchange::computeInitiatorConfirmation($resultA['xV'], $resultA['yV'], $idA, $idB, $RA, $RB, $PA, $PB);
-        $s2 = KeyExchange::computeResponderConfirmation($resultA['xV'], $resultA['yV'], $idA, $idB, $RA, $RB, $PA, $PB);
+        $sa = KeyExchange::computeInitiatorConfirmation($resultA['xV'], $resultA['yV'], $idA, $idB, $RA, $RB, $PA, $PB);
+        $sb = KeyExchange::computeResponderConfirmation($resultA['xV'], $resultA['yV'], $idA, $idB, $RA, $RB, $PA, $PB);
 
         $this->assertSame('3db959ec1684a863b588c10fd619034c01ae03d5a5c0853d72dbfedd1bf5d3cc', $resultA['key']);
         $this->assertSame($resultA['key'], $resultB['key']);
@@ -159,8 +160,35 @@ class Sm2VectorsTest extends TestCase
         $this->assertSame('5e3745ddc03acd3ae56fe323250f1b1731aa640a6461d0711a5d257fb84672e6', $resultA['yV']);
         $this->assertSame($resultA['xV'], $resultB['xV']);
         $this->assertSame($resultA['yV'], $resultB['yV']);
-        $this->assertSame('1d21c24d35e236799b31bef3ec792e7ce2bb2fb849b11365dea705dc396e2075', $s1);
-        $this->assertSame('e19da0d1f5ca755083a82527f185660305d07d2e6752adeee8e56f468176663d', $s2);
+        $this->assertSame('e19da0d1f5ca755083a82527f185660305d07d2e6752adeee8e56f468176663d', $sa);
+        $this->assertSame('1d21c24d35e236799b31bef3ec792e7ce2bb2fb849b11365dea705dc396e2075', $sb);
+    }
+
+    public function testKeyExchangeConfirmationRolesFollowGmT0003(): void
+    {
+        $dA = str_pad('1', 64, '0', STR_PAD_LEFT);
+        $dB = str_pad('2', 64, '0', STR_PAD_LEFT);
+        $rA = str_pad('3', 64, '0', STR_PAD_LEFT);
+        $rB = str_pad('4', 64, '0', STR_PAD_LEFT);
+        $ida = 'Alice123@example';
+        $idb = 'Bob456@example';
+        $PA = Sm2::getPublicKey($dA);
+        $PB = Sm2::getPublicKey($dB);
+        $RA = Sm2::getEphemeralPublicKey($rA);
+        $RB = Sm2::getEphemeralPublicKey($rB);
+
+        $initiator = KeyExchange::initiatorComputeKeyWithConfirmation($dA, $rA, $PB, $RB, 32, $ida, $idb);
+        $responder = KeyExchange::responderComputeKeyWithConfirmation($dB, $rB, $PA, $RA, 32, $ida, $idb);
+
+        $this->assertSame('1d21c24d35e236799b31bef3ec792e7ce2bb2fb849b11365dea705dc396e2075', $initiator['s1']);
+        $this->assertSame('e19da0d1f5ca755083a82527f185660305d07d2e6752adeee8e56f468176663d', $initiator['sa']);
+        $this->assertSame($initiator['key'], $responder['key']);
+        $this->assertSame($initiator['s1'], $responder['sb']);
+        $this->assertSame($initiator['sa'], $responder['s2']);
+        $this->assertTrue(KeyExchange::verifyResponderConfirmationForInitiator($initiator['s1'], $responder['sb']));
+        $this->assertTrue(KeyExchange::verifyInitiatorConfirmationForResponder($responder['s2'], $initiator['sa']));
+        $this->assertFalse(KeyExchange::verifyResponderConfirmationForInitiator($initiator['s1'], $initiator['sa']));
+        $this->assertFalse(KeyExchange::verifyInitiatorConfirmationForResponder($responder['s2'], $responder['sb']));
     }
 
     public function testDerSignatureFormat(): void
@@ -188,13 +216,13 @@ class Sm2VectorsTest extends TestCase
     }
 
     // ========================================================================
-    // GM/T 0003.4-2012 公钥加密算法 - 确定性验证
+    // SM2 公钥加密格式验证
     // ========================================================================
 
     public function testEncryptCiphertextFormatMode1(): void
     {
-        // C1C3C2 模式（推荐模式）
-        // C1: 椭圆曲线点 (64 bytes = 128 hex)
+        // C1C3C2 模式（GB/T 32918.4-2016 默认顺序）
+        // C1: SEC1 未压缩点 04||x||y (65 bytes = 130 hex)
         // C3: SM3 哈希值 (32 bytes = 64 hex)
         // C2: 密文 (长度 = 明文长度)
         $kp = Sm2::generateKeyPairHex();
@@ -202,21 +230,21 @@ class Sm2VectorsTest extends TestCase
         $opts = (new Sm2CipherOptions())->setCipherMode(Sm2::CIPHER_MODE_1);
 
         $ct = Sm2::doEncrypt($msg, $kp->getPublicKey(), $opts);
-        // C1(128) + C3(64) + C2(len(msg)*2)
-        $expectedLen = 128 + 64 + strlen($msg) * 2;
+        // C1(130) + C3(64) + C2(len(msg)*2)
+        $expectedLen = 130 + 64 + strlen($msg) * 2;
         $this->assertEquals($expectedLen, strlen($ct));
         $this->assertEquals($msg, Sm2::doDecrypt($ct, $kp->getPrivateKey(), $opts));
     }
 
     public function testEncryptCiphertextFormatMode0(): void
     {
-        // C1C2C3 模式（旧模式，兼容）
+        // C1C2C3 顺序（GM/T 0003.4-2012 interoperability）
         $kp = Sm2::generateKeyPairHex();
         $msg = 'hello';
         $opts = (new Sm2CipherOptions())->setCipherMode(Sm2::CIPHER_MODE_0);
 
         $ct = Sm2::doEncrypt($msg, $kp->getPublicKey(), $opts);
-        $expectedLen = 128 + strlen($msg) * 2 + 64;
+        $expectedLen = 130 + strlen($msg) * 2 + 64;
         $this->assertEquals($expectedLen, strlen($ct));
         $this->assertEquals($msg, Sm2::doDecrypt($ct, $kp->getPrivateKey(), $opts));
     }
@@ -260,14 +288,14 @@ class Sm2VectorsTest extends TestCase
 
     public function testKeyPairPrivateKeyRange(): void
     {
-        // 私钥 d 应在 [1, n-1] 范围内
+        // 私钥 d 应在 [1, n-2] 范围内
         for ($i = 0; $i < 10; $i++) {
             $kp = Sm2::generateKeyPairHex();
             $d = gmp_init($kp->getPrivateKey(), 16);
             $n = gmp_init('FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123', 16);
 
             $this->assertTrue(gmp_cmp($d, 1) >= 0, '私钥必须 >= 1');
-            $this->assertTrue(gmp_cmp($d, $n) < 0, '私钥必须 < n');
+            $this->assertTrue(gmp_cmp($d, gmp_sub($n, 1)) < 0, '私钥必须 <= n-2');
         }
     }
 
@@ -363,10 +391,9 @@ class Sm2VectorsTest extends TestCase
 
     public function testCiphertextMinimumLengthAccepted(): void
     {
-        // 最短密文: C1(128) + C3(64) + C2(0) = 192 hex chars (mode 1, 空明文)
         $kp = Sm2::generateKeyPairHex();
-        $ct = Sm2::doEncrypt('', $kp->getPublicKey());
-        $this->assertEquals(192, strlen($ct), '空明文密文最少 192 hex 字符');
+        $this->expectException(InvalidKeyException::class);
+        Sm2::doDecrypt(str_repeat('a', 192), $kp->getPrivateKey());
     }
 
     // ========================================================================
@@ -414,18 +441,18 @@ class Sm2VectorsTest extends TestCase
         // hash 模式和非 hash 模式产生不同签名
         $kp = Sm2::generateKeyPairHex();
         $optsHash = (new SignatureOptions())->setHash(true)->setPublicKey($kp->getPublicKey());
-        $optsNoHash = new SignatureOptions();
+        $optsNoHash = (new SignatureOptions())->setHash(false);
 
-        $msg = 'cross mode test';
-        $sigHash = Sm2::doSignature($msg, $kp->getPrivateKey(), $optsHash);
-        $sigNoHash = Sm2::doSignature($msg, $kp->getPrivateKey(), $optsNoHash);
+        $digest = random_bytes(32);
+        $sigHash = Sm2::doSignature($digest, $kp->getPrivateKey(), $optsHash);
+        $sigNoHash = Sm2::doSignature($digest, $kp->getPrivateKey(), $optsNoHash);
 
         // 两种模式签名都应被各自模式验证通过
-        $this->assertTrue(Sm2::doVerifySignature($msg, $sigHash, $kp->getPublicKey(), $optsHash));
-        $this->assertTrue(Sm2::doVerifySignature($msg, $sigNoHash, $kp->getPublicKey(), $optsNoHash));
+        $this->assertTrue(Sm2::doVerifySignature($digest, $sigHash, $kp->getPublicKey(), $optsHash));
+        $this->assertTrue(Sm2::doVerifySignature($digest, $sigNoHash, $kp->getPublicKey(), $optsNoHash));
 
         // 交叉验证应失败
-        $this->assertFalse(Sm2::doVerifySignature($msg, $sigHash, $kp->getPublicKey(), $optsNoHash));
+        $this->assertFalse(Sm2::doVerifySignature($digest, $sigHash, $kp->getPublicKey(), $optsNoHash));
     }
 
     // ========================================================================

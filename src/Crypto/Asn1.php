@@ -15,6 +15,11 @@ class Asn1
     public const TAG_INTEGER = 0x02;
     public const TAG_OCTET_STRING = 0x04;
 
+    /** Maximum DER size of an SM2 signature: two 33-byte INTEGERs plus headers. */
+    private const MAX_DER_SIGNATURE_LENGTH = 72;
+
+    private const SM2_CURVE_ORDER = 'FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123';
+
     /**
      * Decode an ASN.1 INTEGER from DER data.
      *
@@ -25,7 +30,7 @@ class Asn1
      */
     public static function decodeInteger(string $data, int &$offset): string
     {
-        if (!isset($data[$offset])) {
+        if ($offset < 0 || !isset($data[$offset])) {
             throw new CryptoException('Unexpected end of ASN.1 data');
         }
         if (ord($data[$offset]) !== self::TAG_INTEGER) {
@@ -70,7 +75,7 @@ class Asn1
      */
     public static function decodeSequence(string $data, int &$offset): int
     {
-        if (!isset($data[$offset])) {
+        if ($offset < 0 || !isset($data[$offset])) {
             throw new CryptoException('Unexpected end of ASN.1 data');
         }
         if (ord($data[$offset]) !== self::TAG_SEQUENCE) {
@@ -92,12 +97,16 @@ class Asn1
      */
     private static function decodeLength(string $data, int &$offset): int
     {
-        if (!isset($data[$offset])) {
+        $dataLength = strlen($data);
+        if ($offset < 0 || $offset >= $dataLength) {
             throw new CryptoException('Unexpected end of ASN.1 data');
         }
 
         $len = ord($data[$offset++]);
         if (($len & 0x80) === 0) {
+            if ($len > $dataLength - $offset) {
+                throw new CryptoException('ASN.1 length exceeds available data');
+            }
             return $len;
         }
 
@@ -105,7 +114,7 @@ class Asn1
         if ($lenBytes === 0) {
             throw new CryptoException('ASN.1 indefinite lengths are not valid DER');
         }
-        if ($lenBytes > 4 || $offset + $lenBytes > strlen($data)) {
+        if ($lenBytes > 4 || $lenBytes > $dataLength - $offset) {
             throw new CryptoException('ASN.1 length bytes exceed available data');
         }
         if ($lenBytes > 1 && ord($data[$offset]) === 0x00) {
@@ -114,10 +123,17 @@ class Asn1
 
         $decoded = 0;
         for ($i = 0; $i < $lenBytes; $i++) {
-            $decoded = ($decoded << 8) | ord($data[$offset++]);
+            $byte = ord($data[$offset++]);
+            if ($decoded > intdiv(PHP_INT_MAX - $byte, 256)) {
+                throw new CryptoException('ASN.1 length exceeds supported integer range');
+            }
+            $decoded = $decoded * 256 + $byte;
         }
         if ($decoded < 128) {
             throw new CryptoException('ASN.1 length is not minimally encoded');
+        }
+        if ($decoded > $dataLength - $offset) {
+            throw new CryptoException('ASN.1 length exceeds available data');
         }
 
         return $decoded;
@@ -134,6 +150,9 @@ class Asn1
      */
     public static function encodeLength(int $len): string
     {
+        if ($len < 0) {
+            throw new CryptoException('ASN.1 length must not be negative');
+        }
         if ($len < 128) {
             return chr($len & 0xFF);
         }
@@ -160,14 +179,15 @@ class Asn1
         if (strlen($hex) % 2 !== 0) {
             throw new CryptoException('Invalid hex for integer encoding: odd length');
         }
-        if (!preg_match('/^[0-9a-fA-F]+$/', $hex)) {
+        if (!preg_match('/\A[0-9a-fA-F]+\z/', $hex)) {
             throw new CryptoException('Invalid hex for integer encoding');
         }
         // 上游 preg_match 已确保纯十六进制且偶数长度，hex2bin 不可能失败
         $bytes = (string) hex2bin($hex);
 
-        while (strlen($bytes) > 1 && ord($bytes[0]) === 0) {
-            $bytes = substr($bytes, 1);
+        $bytes = ltrim($bytes, "\x00");
+        if ($bytes === '') {
+            $bytes = "\x00";
         }
 
         if (ord($bytes[0]) > 0x7f) {
@@ -214,10 +234,26 @@ class Asn1
      */
     public static function encodeDerSignatureBinary(string $rHex, string $sHex): string
     {
+        self::validateSignatureComponent($rHex, 'r');
+        self::validateSignatureComponent($sHex, 's');
+
         $rBytes = self::encodeInteger($rHex);
         $sBytes = self::encodeInteger($sHex);
         $sequence = $rBytes . $sBytes;
         return self::encodeSequence($sequence);
+    }
+
+    private static function validateSignatureComponent(string $hex, string $component): void
+    {
+        if (!preg_match('/\\A[0-9a-fA-F]{64}\\z/', $hex)) {
+            throw new CryptoException('Invalid SM2 signature ' . $component . ': expected exactly 64 hex characters');
+        }
+
+        $value = gmp_init($hex, 16);
+        $order = gmp_init(self::SM2_CURVE_ORDER, 16);
+        if (gmp_cmp($value, 1) < 0 || gmp_cmp($value, $order) >= 0) {
+            throw new CryptoException('Invalid SM2 signature ' . $component . ': value must be in [1, n-1]');
+        }
     }
 
     /**
@@ -229,7 +265,10 @@ class Asn1
      */
     public static function decodeDerSignature(string $der): array
     {
-        if (!preg_match('/^[0-9a-fA-F]+$/', $der)) {
+        if (strlen($der) > self::MAX_DER_SIGNATURE_LENGTH * 2) {
+            throw new CryptoException('Invalid DER signature: exceeds maximum length');
+        }
+        if (!preg_match('/\A[0-9a-fA-F]+\z/', $der)) {
             throw new CryptoException('Invalid DER signature hex');
         }
         $data = @hex2bin($der);
@@ -249,6 +288,10 @@ class Asn1
      */
     public static function decodeDerSignatureBinary(string $data): array
     {
+        if (strlen($data) > self::MAX_DER_SIGNATURE_LENGTH) {
+            throw new CryptoException('Invalid DER signature: exceeds maximum length');
+        }
+
         $offset = 0;
         $seqLen = self::decodeSequence($data, $offset);
         $seqEnd = $offset + $seqLen;
@@ -262,9 +305,14 @@ class Asn1
         $rHex = gmp_strval(gmp_init($r), 16);
         $sHex = gmp_strval(gmp_init($s), 16);
 
+        $rHex = str_pad($rHex, 64, '0', STR_PAD_LEFT);
+        $sHex = str_pad($sHex, 64, '0', STR_PAD_LEFT);
+        self::validateSignatureComponent($rHex, 'r');
+        self::validateSignatureComponent($sHex, 's');
+
         return [
-            str_pad($rHex, 64, '0', STR_PAD_LEFT),
-            str_pad($sHex, 64, '0', STR_PAD_LEFT),
+            $rHex,
+            $sHex,
         ];
     }
 }

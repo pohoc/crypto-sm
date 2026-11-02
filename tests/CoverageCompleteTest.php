@@ -6,6 +6,7 @@ namespace CryptoSm\Tests;
 
 use CryptoSm\Crypto\Gcm;
 use CryptoSm\Exception\CryptoException;
+use CryptoSm\Exception\InvalidKeyException;
 use CryptoSm\SM2\KeyExchange;
 use CryptoSm\SM2\Keypair;
 use CryptoSm\SM2\Sm2;
@@ -33,15 +34,15 @@ class CoverageCompleteTest extends TestCase
 
     public function testKeypairToString(): void
     {
-        $kp = new Keypair('a' . str_repeat('0', 63), 'b' . str_repeat('0', 127));
+        $kp = Sm2::generateKeyPairHex();
         $str = $kp->__toString();
-        $this->assertStringNotContainsString('a' . str_repeat('0', 63), $str);
-        $this->assertStringContainsString('b', $str);
+        $this->assertStringNotContainsString($kp->getPrivateKey(), $str);
+        $this->assertSame($kp->getPublicKey(), $str);
     }
 
     public function testKeypairJsonSerialize(): void
     {
-        $kp = new Keypair(str_repeat('a', 64), str_repeat('b', 128));
+        $kp = Sm2::generateKeyPairHex();
         $json = $kp->jsonSerialize();
         $this->assertArrayHasKey('privateKey', $json);
         $this->assertArrayHasKey('publicKey', $json);
@@ -87,6 +88,7 @@ class CoverageCompleteTest extends TestCase
         $this->assertFalse(Hex::isValidHex('xyz'));
         $this->assertFalse(Hex::isValidHex('abcg'));
         $this->assertFalse(Hex::isValidHex('0x123'));
+        $this->assertFalse(Hex::isValidHex("ab\n"));
     }
 
     public function testHexIsValidHexSingleChar(): void
@@ -301,7 +303,7 @@ class CoverageCompleteTest extends TestCase
      */
     public static function provideGcmTagLengths(): array
     {
-        return [[4], [8], [12], [13], [14], [15], [16]];
+        return [[12], [13], [14], [15], [16]];
     }
 
     /**
@@ -310,7 +312,7 @@ class CoverageCompleteTest extends TestCase
     #[DataProvider('provideGcmTagLengths')]
     public function testSm4GcmWithTagLength(int $tagLength): void
     {
-        $key = str_repeat('e', 32);
+        $key = str_repeat(sprintf('%02x', $tagLength), 16);
         // IV 必须随用例唯一：GCM 禁止同一 key+IV 复用（检测默认开启）
         $iv = str_repeat('12', 14) . sprintf('%04x', $tagLength);
         $plaintext = 'Test GCM tag length ' . $tagLength;
@@ -328,12 +330,12 @@ class CoverageCompleteTest extends TestCase
 
     public function testSm4GcmWithAadAndTagLength(): void
     {
-        $key = str_repeat('ff', 16);
         $aad = 'authenticated data';
         $plaintext = 'secret message';
 
-        $tagLengths = [4, 8, 12, 16];
+        $tagLengths = [12, 16];
         foreach ($tagLengths as $tl) {
+            $key = str_repeat(sprintf('%02x', $tl), 16);
             // 每个 tagLength 用例使用独立 IV，避免跨迭代触发 GCM IV 重用检测
             $opts = (new Sm4Options())
                 ->setMode(Sm4::MODE_GCM)
@@ -355,8 +357,9 @@ class CoverageCompleteTest extends TestCase
         $kp = Sm2::generateKeyPairHex();
         $ct = Sm2::doEncrypt('hello 04 prefix', $kp->getPublicKey());
 
-        // Prepend 04 to the ciphertext
-        $ctWithPrefix = '04' . $ct;
+        // Re-encode the default SEC1-prefixed C1 as a raw point, then restore
+        // the SEC1 prefix to exercise the alternate accepted input form.
+        $ctWithPrefix = '04' . substr($ct, 2);
         $pt = Sm2::doDecrypt($ctWithPrefix, $kp->getPrivateKey());
         $this->assertEquals('hello 04 prefix', $pt);
     }
@@ -368,7 +371,7 @@ class CoverageCompleteTest extends TestCase
         $opts->setCipherMode(Sm2::CIPHER_MODE_0);
         $ct = Sm2::doEncrypt('04 prefix mode 0', $kp->getPublicKey(), $opts);
 
-        $ctWithPrefix = '04' . $ct;
+        $ctWithPrefix = '04' . substr($ct, 2);
         $pt = Sm2::doDecrypt($ctWithPrefix, $kp->getPrivateKey(), $opts);
         $this->assertEquals('04 prefix mode 0', $pt);
     }
@@ -378,11 +381,16 @@ class CoverageCompleteTest extends TestCase
         $kp = Sm2::generateKeyPairHex();
         $ct = Sm2::doEncrypt('test', $kp->getPublicKey());
 
-        // Prefix with 04 but invalid C1 point (should NOT strip)
+        // Prefix with 04 but invalid C1 points in both raw and SEC1 positions.
         $invalidPrefix = '04' . str_repeat('0', 128) . substr($ct, 128);
-        // This should fail because the original C1 starts at offset 2+128 but is incorrect
-        // Actually let's just verify that a normal prefix works
-        $ctWithPrefix = '04' . $ct;
+        try {
+            Sm2::doDecrypt($invalidPrefix, $kp->getPrivateKey());
+            $this->fail('Expected malformed C1 to be rejected');
+        } catch (\CryptoSm\Exception\InvalidKeyException $exception) {
+            $this->assertSame('Invalid C1', $exception->getMessage());
+        }
+
+        $ctWithPrefix = '04' . substr($ct, 2);
         $pt = Sm2::doDecrypt($ctWithPrefix, $kp->getPrivateKey());
         $this->assertEquals('test', $pt);
     }
@@ -545,19 +553,17 @@ class CoverageCompleteTest extends TestCase
     public function testSm2EncryptDecryptEmptyData(): void
     {
         $kp = Sm2::generateKeyPairHex();
-        $ct = Sm2::doEncrypt('', $kp->getPublicKey());
-        $pt = Sm2::doDecrypt($ct, $kp->getPrivateKey());
-        $this->assertEquals('', $pt);
+        $this->expectException(InvalidKeyException::class);
+        Sm2::doEncrypt('', $kp->getPublicKey());
     }
 
-    public function testSm2EncryptDecryptEmptyDataMode0(): void
+    public function testSm2RejectsEmptyPlaintextMode0(): void
     {
         $kp = Sm2::generateKeyPairHex();
         $opts = new \CryptoSm\SM2\Sm2CipherOptions();
         $opts->setCipherMode(Sm2::CIPHER_MODE_0);
-        $ct = Sm2::doEncrypt('', $kp->getPublicKey(), $opts);
-        $pt = Sm2::doDecrypt($ct, $kp->getPrivateKey(), $opts);
-        $this->assertEquals('', $pt);
+        $this->expectException(InvalidKeyException::class);
+        Sm2::doEncrypt('', $kp->getPublicKey(), $opts);
     }
 
     // ─── GCM invalid tag causes decrypt failure ───────────────────────────
@@ -730,6 +736,8 @@ class CoverageCompleteTest extends TestCase
 
     // ─── SM4 all modes with SmCrypto facade ───────────────────────────────
 
+    /** @runInSeparateProcess */
+    #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
     public function testSmCryptoFacadeSm4Ecb(): void
     {
         $key = str_repeat('0f', 16);

@@ -12,7 +12,7 @@ use CryptoSm\Exception\InvalidKeyException;
 class SignatureOptions
 {
     private bool $der = false;
-    private bool $hash = false;
+    private bool $hash = true;
     private string $publicKey = '';
     private string $userId = '1234567812345678';
 
@@ -47,8 +47,9 @@ class SignatureOptions
     /**
      * Set whether to hash the message before signing.
      *
-     * When true, the message is hashed with SM3 along with the user ID
-     * and public key per the SM2 standard.
+     * When true (the default), the message is hashed with SM3 along with the
+     * user ID and public key per the SM2 standard. When false, data passed to
+     * sign/verify must be an exactly 32-byte precomputed digest.
      *
      * @param  bool $hash True to enable hashing
      * @return self
@@ -79,7 +80,7 @@ class SignatureOptions
      */
     public function setPublicKey(string $publicKey): self
     {
-        if ($publicKey !== '' && !preg_match('/^[0-9a-fA-F]{128}$/', $publicKey)) {
+        if ($publicKey !== '' && !preg_match('/\A[0-9a-fA-F]{128}\z/', $publicKey)) {
             throw new InvalidKeyException('Public key must be 128 hex chars (uncompressed)');
         }
         $this->publicKey = $publicKey;
@@ -97,7 +98,7 @@ class SignatureOptions
     /**
      * Set the user ID for SM2 signature hash computation.
      *
-     * Default: "1234567812345678" (the standard default ID per GM/T 0003-2012).
+     * Default: "1234567812345678" (the standard default ID per GM/T 0009-2023, Section 10).
      *
      * @param  string $userId User ID string
      * @return self

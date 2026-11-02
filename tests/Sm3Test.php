@@ -35,6 +35,71 @@ class Sm3Test extends TestCase
         $this->assertEquals(64, strlen($result));
     }
 
+    public function testSm3BitLengthEncodingDoesNotOverflowNativeInteger(): void
+    {
+        $encodeBitLength = new \ReflectionMethod(Sm3::class, 'encodeBitLength');
+        $this->assertSame("\0\0\0\0\0\0\0\0", $encodeBitLength->invoke(null, 0));
+        $this->assertSame("\0\0\0\0\0\0\0\x08", $encodeBitLength->invoke(null, 1));
+        $this->assertSame("\0\0\0\x01\0\0\0\0", $encodeBitLength->invoke(null, 0x20000000));
+
+        if (PHP_INT_SIZE >= 8) {
+            $this->expectException(\RuntimeException::class);
+            $encodeBitLength->invoke(null, intdiv(PHP_INT_MAX, 4) + 1);
+        }
+    }
+
+    public function testSm3StreamingLengthUsesPortableWideCounter(): void
+    {
+        $sm3 = new Sm3();
+        $addLength = new \ReflectionMethod(Sm3::class, 'addToTotalLength');
+        $totalLength = new \ReflectionProperty(Sm3::class, 'totalLengthBytes');
+        $encodeBitLengthHex = new \ReflectionMethod(Sm3::class, 'encodeBitLengthHex');
+
+        $addLength->invoke($sm3, 0x20000000);
+        $lengthBytes = $totalLength->getValue($sm3);
+        $this->assertSame("\0\0\0\0\x20\0\0\0", $lengthBytes);
+        $this->assertSame("\0\0\0\x01\0\0\0\0", $encodeBitLengthHex->invoke(null, bin2hex($lengthBytes)));
+
+        $totalLength->setValue($sm3, pack('H*', '2000000000000000'));
+        $this->expectException(\RuntimeException::class);
+        $addLength->invoke($sm3, 0);
+    }
+
+    public function testSm3PurePhpStreamingPathUsesWideLengthCounter(): void
+    {
+        $stream = new Sm3();
+        (new \ReflectionProperty(Sm3::class, 'nativeAvailable'))->setValue($stream, false);
+        (new \ReflectionProperty(Sm3::class, 'hashContext'))->setValue($stream, null);
+
+        $message = str_repeat('streamed data', 20);
+        $stream->update(substr($message, 0, 71))->update(substr($message, 71));
+
+        $this->assertSame(Sm3::sm3($message), $stream->finalize());
+    }
+
+    public function testSm3PurePhpStreamingHandlesPartialAndLargeChunks(): void
+    {
+        $stream = new Sm3();
+        (new \ReflectionProperty(Sm3::class, 'nativeAvailable'))->setValue($stream, false);
+        (new \ReflectionProperty(Sm3::class, 'hashContext'))->setValue($stream, null);
+        $message = str_repeat('abcdef0123456789', 1024) . 'tail';
+        $stream->update(substr($message, 0, 1));
+        $stream->update(substr($message, 1, 10));
+        $stream->update(substr($message, 11));
+        $this->assertSame(Sm3::sm3($message), $stream->finalize());
+    }
+
+    public function testClonedSm3StreamsAreIndependent(): void
+    {
+        $original = new Sm3();
+        $original->update('prefix');
+        $copy = clone $original;
+        $copy->update('B');
+        $original->update('A');
+        $this->assertSame(Sm3::sm3('prefixA'), $original->finalize());
+        $this->assertSame(Sm3::sm3('prefixB'), $copy->finalize());
+    }
+
     public function testSm3Consistency(): void
     {
         $msg = 'test message for consistency';

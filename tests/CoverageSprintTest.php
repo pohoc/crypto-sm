@@ -196,7 +196,7 @@ final class CoverageSprintTest extends TestCase
 
     public function testCcmAadBeyond16BitUsesExtendedPrefix(): void
     {
-        // AAD ≥65536 走 FF FE + 2 字节长度的扩展编码分支
+        // AAD ≥65280 走 FF FE + 4 字节长度的扩展编码分支
         $ccm = Ccm::fromKey(random_bytes(16));
         $nonce = random_bytes(12);
         $aad = str_repeat('K', 70000);
@@ -216,7 +216,7 @@ final class CoverageSprintTest extends TestCase
 
     public function testCcmHugeAadStillAuthenticates(): void
     {
-        // 触发 formatAad 的 4 字节长度前缀分支（≥65536）
+        // 触发 formatAad 的 4 字节长度前缀分支（≥65280）
         $ccm = Ccm::fromKey(random_bytes(16));
         $nonce = random_bytes(12);
         $aad = str_repeat('Z', 65536);

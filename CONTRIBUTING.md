@@ -74,7 +74,7 @@ This runs: `cs-check` → `analyse` → `test`
 
 ## Coding Standards
 
-- PHP 8.0+ compatible (no 8.1+ only syntax features like enums, fibers, readonly properties)
+- PHP 8.2+ compatible
 - `declare(strict_types=1)` in every file
 - PSR-4 autoloading
 - PSR-12 coding style

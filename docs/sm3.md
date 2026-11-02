@@ -7,6 +7,7 @@ SM3 是中国密码杂凑算法标准 (GM/T 0004-2012)，产生 256 位的哈希
 本实现特性：
 - **OpenSSL 加速**：自动检测 `hash_algos()` 中的 `sm3`（PHP ≥7.4 且链接 OpenSSL 1.1.1+ 时可用），可用时使用 C 原生实现（比纯 PHP 快约两个数量级以上）
 - **纯 PHP 回退**：当 PHP 的 hash 扩展不支持 SM3 时自动回退
+- **平台要求**：纯 PHP SM3 回退需要 64 位 PHP；32 位 PHP 必须具备原生 `hash('sm3')` 支持，否则会明确抛出 `RuntimeException`，避免返回不可靠的摘要
 - **流式哈希**：支持分块更新，适用于大文件等场景
 - **HMAC-SM3**：RFC 2104 标准的 HMAC 实现
 
@@ -96,7 +97,13 @@ $data = 'message to authenticate';
 
 $hmac = HmacSm3::hmac($key, $data);
 echo $hmac; // 64 字符十六进制
+
+if (!HmacSm3::verify($key, $data, $receivedMac)) {
+    throw new RuntimeException('HMAC verification failed');
+}
 ```
+
+`verify()` 拒绝非 64 位十六进制值，并使用 `hash_equals()` 比较有效 MAC；也可通过 `SmCrypto::verifyHmacSm3()` 调用。
 
 ### 流式计算
 
@@ -114,6 +121,22 @@ echo $result; // 64 字符十六进制
 // finalize 后自动重置，可复用
 $result2 = $hmac->update('new data')->finalize();
 ```
+
+## PBKDF2-HMAC-SM3
+
+`Pbkdf2Sm3` 按 RFC 8018 §5.2 的 PBKDF2 构造，以 HMAC-SM3 作为 PRF。派生长度以字节计；底层 `derive()` 返回原始字节，`deriveHex()` 和 `SmCrypto::pbkdf2Sm3()` 返回小写十六进制：
+
+```php
+use CryptoSm\SM3\Pbkdf2Sm3;
+use CryptoSm\SmCrypto;
+
+$salt = random_bytes(16);
+$key = Pbkdf2Sm3::derive('user password', $salt, 100000, 32); // 32 个原始字节
+$keyHex = Pbkdf2Sm3::deriveHex('user password', $salt, 100000, 32);
+$keyHexViaFacade = SmCrypto::pbkdf2Sm3('user password', $salt, 100000, 32);
+```
+
+迭代数和派生长度必须为正数；超出 RFC 的 32-bit 派生块索引范围会被拒绝。RFC 8018 建议随机盐至少 8 字节、迭代数至少 1,000，并按可接受的延迟尽可能提高迭代数。迭代数由调用方显式传入，不使用隐藏默认值。PBKDF2 用于口令派生；高强度口令存储场景还应考虑专为密码哈希设计的内存困难算法。
 
 ### 使用场景
 
