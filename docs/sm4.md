@@ -6,17 +6,18 @@ SM4 是中国分组密码算法标准 (GM/T 0002-2012)，是一种 128 位分组
 
 本实现特性：
 - **6 种加密模式**：ECB、CBC、CFB、OFB、CTR、GCM
+- **独立 CCM API**：`CryptoSm\Crypto\Ccm` 提供 CCM AEAD；它不属于 `Sm4` 门面的六种模式
 - **5 种填充模式**：PKCS5/PKCS7、Zero、ISO 10126、ANSI X9.23、None
 - **OpenSSL 加速**：ECB/CBC/CFB/OFB/CTR 优先使用 OpenSSL C 原生实现
-- **纯 PHP 回退**：OpenSSL 不支持 SM4 时，ECB/CBC/CFB/OFB/CTR/GCM 自动使用纯 PHP SM4 block fallback
+- **纯 PHP 回退**：OpenSSL 不支持可用的 SM4 后端时，分组加密可回退到纯 PHP SM4 实现
 - **平台要求**：纯 PHP SM4 回退需要 64 位 PHP；32 位 PHP 若无 OpenSSL SM4 支持，会明确抛出 `CryptoException`，不会继续产生不可靠的密码结果
-- **GCM 后端**：优先使用 OpenSSL SM4-ECB 做块加密，并由 `Gcm` 实现 CTR/GHASH（`GcmPure` 已废弃别名）
+- **GCM 后端**：运行时可执行 OpenSSL `SM4-GCM` 时使用原生 AEAD；否则由 `Gcm` 实现 CTR/GHASH，并优先使用 OpenSSL `SM4-ECB` 加密分组（`GcmPure` 已废弃别名）
 - **GCM 预热**：`Sm4::warmupGcm($key)` 为兼容 API；当前无建表开销，但会校验密钥并创建/更新进程内 GCM 缓存，无需为性能调用
 
 ## 实现与性能预期
 
-- GCM 当前由本库实现 CTR/GHASH，底层块加密优先调用 OpenSSL `SM4-ECB`
-- OpenSSL 不支持 SM4 时会自动回退到纯 PHP SM4 block
+- OpenSSL 可执行 `SM4-GCM` 时使用原生 AEAD；否则由本库实现 CTR/GHASH，并优先调用 OpenSSL `SM4-ECB`
+- OpenSSL 不支持所需 SM4 后端时，分组加密会回退到纯 PHP SM4 实现
 - GCM 路径的性能会显著低于 `CBC/CFB/OFB/CTR`
 - 如果业务依赖高吞吐 AEAD，应先通过基准测试确认性能满足业务要求
 
@@ -143,7 +144,9 @@ $plaintext = Sm4::decrypt($ciphertext, $key, $options);
 
 CTR 加密会按密钥登记实际消耗的 128 位计数器区间；CFB/OFB 加密会逐块登记该消息实际使用的每个分组密码输入，避免另一条消息把先前的反馈输入直接用作 IV。跨进程也需要此保证时，应配置 `Sm4StreamBlockTrackerInterface`；旧的 `Sm4FeedbackIvTrackerInterface` 只协调消息初始 IV。CCM/GCM 计数器及 CBC/ECB 分组输入也不由此 tracker 协调。为避免不同模式间发生可控的分组输入重用，本库在进程内 fail closed：同一把密钥只能用于其中一种模式；直接调用 `Sm4PurePhp::setKey()` 使用分组原语时，该密钥会被登记为 `raw-block`，也不能与其他模式共用。解密不登记范围，正常往返不会被拒绝。本地最多追踪 65,536 个区间，模式 key 表最多记录 65,536 把 key；达到任一上限后都会拒绝新记录。
 
-跨进程或重启仍复用 SM4 key 时，必须在应用启动阶段配置持久化的 `Sm4KeyModeTrackerInterface`，并让所有 worker 共享同一原子 key-to-mode 记录。它收到的是原始 32 字节 SHA-256 key 指纹和模式名；同一 key 的同模式重复 claim 必须成功，跨模式 claim 必须失败。加密会原子 claim 模式；解密只调用只读 `isModeAllowed()`，不会因未认证输入创建或修改记录，因此解密专用的既有 key 必须由可信配置通过 `Sm4::registerKeyMode()` 预登记。不要用未经认证的 payload 元数据选择解密模式。该接口负责协调 ECB、CBC、CFB、OFB、CTR、GCM、CCM 与 `raw-block`，但不能代替各模式自己的 IV、nonce、计数器及用量 tracker。`Sm4StreamBlockTrackerInterface` 协调 CTR 区间及 CFB/OFB 每条加密实际使用的反馈输入；兼容接口 `Sm4FeedbackIvTrackerInterface` 只协调初始 IV。未配置共享 key-mode tracker 时，跨进程部署必须由应用自身严格实施每种模式使用独立密钥的约束；单进程中的未登记解密专用 key 也由调用方按可信配置维持模式隔离。
+跨进程或重启仍复用 SM4 key 时，必须在应用启动阶段配置持久化的 `Sm4KeyModeTrackerInterface`，并让所有 worker 共享同一原子 key-to-mode 记录。它收到的是原始 32 字节 SHA-256 key 指纹和模式名；同一 key 的同模式重复 claim 必须成功，跨模式 claim 必须失败。加密会原子 claim 模式；解密只调用只读 `isModeAllowed()`，不会因未认证输入创建或修改记录，因此解密专用的既有 key 必须由可信配置通过 `Sm4::registerKeyMode()` 预登记。不要用未经认证的 payload 元数据选择解密模式。该接口负责协调 ECB、CBC、CFB、OFB、CTR、GCM、CCM 与 `raw-block`，但不能代替各模式自己的 IV、nonce、计数器及用量 tracker。
+
+流模式追踪器的优先级必须按实现配置：`Sm4KeyModeTrackerInterface` 独立负责模式隔离；配置 `Sm4StreamBlockTrackerInterface` 后，它接管 CTR/CFB/OFB 的分组输入追踪，CTR 专用 `Sm4CtrCounterTrackerInterface` 和 CFB/OFB 初始 IV `Sm4FeedbackIvTrackerInterface` 不会收到相应调用。未配置统一流 tracker 时，CTR 才能使用专用 CTR tracker；CFB/OFB 的 feedback IV tracker 只协调初始 IV，进程内反馈输入范围仍由库登记。不要同时配置统一流 tracker 和被覆盖的专用 tracker 并假定它们会叠加。
 
 ```php
 use CryptoSm\SM4\Sm4;
@@ -152,11 +155,12 @@ use CryptoSm\Interfaces\Sm4StreamBlockTrackerInterface;
 
 Sm4::setKeyModeTracker($sharedKeyModeTracker);
 Sm4::setStreamBlockTracker($sharedStreamBlockTracker);
-// 解密旧数据且此前未由此 tracker 记录的 key，需要从可信 key 配置中登记：
-Sm4::registerKeyMode($key, Sm4::MODE_GCM);
+// 仅解密的旧 key 按真实历史模式登记，不能一律登记为 GCM：
+Sm4::registerKeyMode($oldCbcKeyHex, Sm4::MODE_CBC);
+Sm4::registerKeyMode($existingGcmKeyHex, Sm4::MODE_GCM); // 另一把 key
 ```
 
-如果部署仅使用 CTR，可继续使用旧的 CTR 专用追踪器；它负责跨进程协调 CTR 区间，并替代本地 CTR 区间历史，因此不会受本地 65,536 条区间上限影响。它不会协调 CFB/OFB，也不替代 key-mode tracker 的跨模式隔离：
+如果部署仅使用 CTR，且没有配置 `Sm4StreamBlockTrackerInterface`，可使用 CTR 专用 tracker。它负责跨进程协调 CTR 区间并替代本地 CTR 区间历史，因此不会受本地 65,536 条区间上限影响。配置统一流 tracker 时，此专用 tracker 不会被调用。它不会协调 CFB/OFB，也不替代 key-mode tracker 的跨模式隔离：
 
 ```php
 use CryptoSm\SM4\Sm4;
@@ -344,27 +348,28 @@ use CryptoSm\SmCrypto;
 use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
 
-$key = '0123456789abcdeffedcba9876543210';
+$gcmKey = '0123456789abcdeffedcba9876543210';
 
-// CBC 兼容模式（需显式选择）
-$ciphertext = SmCrypto::sm4Encrypt('Hello World', $key);
-$plaintext = SmCrypto::sm4Decrypt($ciphertext, $key);
+// 无选项时默认 GCM，自包含格式可直接往返
+$ciphertext = SmCrypto::sm4Encrypt('Hello World', $gcmKey);
+$plaintext = SmCrypto::sm4Decrypt($ciphertext, $gcmKey);
 
 // 自包含 payload API（推荐）：自动携带 IV/tag 元数据
-$payload = SmCrypto::sm4EncryptPayload('Hello World', $key, (new Sm4Options())->setMode(Sm4::MODE_GCM));
-$plaintext = SmCrypto::sm4DecryptPayload($payload, $key);
+$payload = SmCrypto::sm4EncryptPayload('Hello World', $gcmKey, (new Sm4Options())->setMode(Sm4::MODE_GCM));
+$plaintext = SmCrypto::sm4DecryptPayload($payload, $gcmKey);
 
 // GCM 加密
 $options = (new Sm4Options())->setMode(Sm4::MODE_GCM)->setIv('000102030405060708090a0b');
-$ciphertext = SmCrypto::sm4Encrypt('Hello World', $key, $options);
-$plaintext = SmCrypto::sm4Decrypt($ciphertext, $key, $options);
+$ciphertext = SmCrypto::sm4Encrypt('Hello World', $gcmKey, $options);
+$plaintext = SmCrypto::sm4Decrypt($ciphertext, $gcmKey, $options);
 
 // 自定义选项
 $options = (new Sm4Options())
     ->setMode(Sm4::MODE_CBC)
     ->setIv('fedcba9876543210fedcba9876543210')
     ->setPadding('pkcs5');
-$ciphertext = SmCrypto::sm4Encrypt('Hello World', $key, $options);
+$cbcKey = '1123456789abcdeffedcba9876543210'; // CBC 与 GCM 使用不同密钥
+$ciphertext = SmCrypto::sm4Encrypt('Hello World', $cbcKey, $options);
 ```
 
 ## 完整示例
@@ -449,7 +454,7 @@ try {
 - **密钥长度**: 128 位（16 字节）
 - **轮数**: 32 轮
 - **标准**: GM/T 0002-2012
-- **GCM 实现**: 优先使用 OpenSSL SM4-ECB 做块加密；不可用时使用纯 PHP SM4 block fallback；CTR/GHASH 由本库 `Gcm` 类实现
+- **GCM 实现**: 运行时可执行 OpenSSL `SM4-GCM` 时使用原生 AEAD；否则优先用 OpenSSL SM4-ECB 做块加密，并由本库 `Gcm` 类实现 CTR/GHASH；SM4-ECB 也不可用时回退到纯 PHP SM4 分组实现
 - **GCM GHASH**: GF(2^128) 乘法采用 NIST SP 800-38D Algorithm 1 的规范直译实现；
   正确性由 RFC 8998 官方向量与独立参考模型差分测试（GcmReferenceModelTest）双重锚定
 - **GcmPure**: 已废弃别名，继承自 `Gcm`，将在未来版本移除

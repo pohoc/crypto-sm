@@ -5,7 +5,7 @@
 
 国密算法 SM2、SM3、SM4 的 PHP 实现。
 
-**PHP 国密库** — 支持 SM2 密钥交换、PEM 导入/导出、HMAC-SM3、PBKDF2-HMAC-SM3、SM3 流式哈希、SM4 全 6 种模式（ECB/CBC/CFB/OFB/CTR/GCM）和 5 种填充模式。
+**PHP 国密库** — 支持 SM2 密钥交换、PEM 导入/导出、HMAC-SM3、PBKDF2-HMAC-SM3、SM3 流式哈希、SM4 门面的 6 种模式（ECB/CBC/CFB/OFB/CTR/GCM），并提供独立的 CCM AEAD API。
 
 ## 安装
 
@@ -78,13 +78,14 @@ var_dump(extension_loaded('gmp'));
 中国分组密码算法 (GM/T 0002-2012)
 - 加密/解密
 - ECB / CBC / CFB / OFB / CTR / GCM 模式
+- 独立的 SM4-CCM AEAD API（`CryptoSm\Crypto\Ccm`）
 - PKCS5/PKCS7 / Zero / ISO 10126 / ANSI X9.23 / None 填充
-- GCM 认证加密（OpenSSL SM4-ECB 加速 + 纯 PHP SM4 fallback + 本库 GHASH 实现）
+- GCM 认证加密（可执行时使用 OpenSSL SM4-GCM；否则使用 OpenSSL SM4-ECB 或纯 PHP SM4 分组加密，并由本库计算 GHASH）
 
 #### SM4-GCM 性能预期
 
-- GCM 当前由本库实现 CTR/GHASH，底层块加密优先调用 OpenSSL `SM4-ECB`
-- OpenSSL 不支持 SM4 时会自动使用纯 PHP SM4 block fallback
+- OpenSSL 可执行 `SM4-GCM` 时使用原生 AEAD；否则 GCM 的 CTR/GHASH 由本库实现，分组加密优先调用 OpenSSL `SM4-ECB`
+- OpenSSL 不支持所需 SM4 后端时会使用纯 PHP SM4 分组实现
 - GCM 路径会显著慢于 `CBC/CFB/OFB/CTR`，属于预期行为
 - 高吞吐 AEAD 场景应先通过基准测试确认性能满足业务要求
 
@@ -232,32 +233,37 @@ $mac = $hmac->finalize();
 use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
 
-$key = '0123456789abcdeffedcba9876543210'; // 32 位十六进制，128 bit
+$cbcKey = '0123456789abcdeffedcba9876543210'; // 每种模式使用独立密钥
+$ecbKey = '1123456789abcdeffedcba9876543210';
+$cfbKey = '2123456789abcdeffedcba9876543210';
+$ofbKey = '3123456789abcdeffedcba9876543210';
+$ctrKey = '4123456789abcdeffedcba9876543210';
+$gcmKey = '5123456789abcdeffedcba9876543210';
 $data = 'Hello World';
 
 // CBC 兼容模式（需显式选择；不提供密文完整性）
 $iv  = '000102030405060708090a0b0c0d0e0f';
 $options = (new Sm4Options())->setMode(Sm4::MODE_CBC)->setIv($iv);
-$ciphertext = Sm4::encrypt($data, $key, $options);
-$plaintext = Sm4::decrypt($ciphertext, $key, $options);
+$ciphertext = Sm4::encrypt($data, $cbcKey, $options);
+$plaintext = Sm4::decrypt($ciphertext, $cbcKey, $options);
 
 // ECB 模式（不推荐，仅用于兼容旧系统）
 $options = (new Sm4Options())->setMode(Sm4::MODE_ECB);
-$ciphertext = Sm4::encrypt($data, $key, $options);
-$plaintext = Sm4::decrypt($ciphertext, $key, $options);
+$ciphertext = Sm4::encrypt($data, $ecbKey, $options);
+$plaintext = Sm4::decrypt($ciphertext, $ecbKey, $options);
 
 // CFB 模式（流式，无需填充；仅加密、不认证，需另加 MAC）
 $options = (new Sm4Options())->setMode(Sm4::MODE_CFB)->setIv($iv);
-$ciphertext = Sm4::encrypt($data, $key, $options);
-$plaintext = Sm4::decrypt($ciphertext, $key, $options);
+$ciphertext = Sm4::encrypt($data, $cfbKey, $options);
+$plaintext = Sm4::decrypt($ciphertext, $cfbKey, $options);
 
 // OFB 模式（仅加密、不认证，需另加 MAC）
 $options = (new Sm4Options())->setMode(Sm4::MODE_OFB)->setIv($iv);
-$ciphertext = Sm4::encrypt($data, $key, $options);
+$ciphertext = Sm4::encrypt($data, $ofbKey, $options);
 
 // CTR 模式（仅加密、不认证，需另加 MAC）
 $options = (new Sm4Options())->setMode(Sm4::MODE_CTR)->setIv($iv);
-$ciphertext = Sm4::encrypt($data, $key, $options);
+$ciphertext = Sm4::encrypt($data, $ctrKey, $options);
 
 // GCM 模式（认证加密，推荐）
 $gcmIv = '000102030405060708090a0b'; // 推荐 12 字节（24 十六进制字符）
@@ -266,13 +272,29 @@ $options = (new Sm4Options())
     ->setIv($gcmIv)
     ->setAad('additional data') // 附加认证数据
     ->setTagLength(16);         // 认证标签长度（12/13/14/15/16 字节）
-$ciphertext = Sm4::encrypt($data, $key, $options);
+$ciphertext = Sm4::encrypt($data, $gcmKey, $options);
 // 密文格式：ciphertext_hex + tag_hex
-$plaintext = Sm4::decrypt($ciphertext, $key, $options);
+$plaintext = Sm4::decrypt($ciphertext, $gcmKey, $options);
 
 // 自包含 payload API（推荐用于业务封装，自动携带 IV/tag 元数据）
-$payload = Sm4::encryptPayload($data, $key, (new Sm4Options())->setMode(Sm4::MODE_GCM));
-$plaintext = Sm4::decryptPayload($payload, $key);
+$payload = Sm4::encryptPayload($data, $gcmKey, (new Sm4Options())->setMode(Sm4::MODE_GCM));
+$plaintext = Sm4::decryptPayload($payload, $gcmKey);
+```
+
+同一密钥不能跨 SM4 模式复用；示例中的每个模式使用独立密钥。CBC/CFB/OFB/CTR 不提供完整性保护，新业务优先选择 GCM。
+
+### SM4-CCM
+
+CCM 通过低层 API 单独提供，密钥与 GCM 或其他 SM4 模式分开使用。生产部署若跨进程复用密钥，应在启动时配置共享 nonce、标签长度和分组用量追踪器，详见 [SM4 安全与追踪器指南](docs/sm4.md)。
+
+```php
+use CryptoSm\Crypto\Ccm;
+
+$ccmKey = hex2bin('6123456789abcdeffedcba9876543210');
+$nonce = random_bytes(12); // 同一 key 下每次加密必须唯一
+$ccm = Ccm::fromKey($ccmKey);
+$sealed = $ccm->encrypt('Hello World', $nonce, '', 16);
+$plaintext = $ccm->decrypt($sealed['ciphertext'], $sealed['tag'], $nonce, '', 16);
 ```
 
 #### SM4 填充模式
@@ -350,10 +372,10 @@ $plaintext = SmCrypto::sm4Decrypt($ciphertext, $key, $options);
 
 ## 特性
 
-- **零运行时依赖** — 仅需 `ext-gmp` 和 `ext-openssl`
+- **轻量运行依赖** — 仅需 PHP 扩展 `ext-gmp` 和 `ext-openssl`
 - **OpenSSL 加速** — SM3 和 SM4（CBC/ECB/CFB/OFB/CTR）优先使用 OpenSSL 原生实现；OpenSSL 不支持 SM4 时自动回退到纯 PHP
-- **标准合规** — 通过 GM/T 0002/0003/0004 标准测试向量与 RFC 8998 SM4-GCM 官方向量验证（720+ 测试，1,000,000+ 断言）
-- **安全** — GCM 认证标签时序安全比较、门面与低层 `Gcm` 默认检测进程内重复 key/IV、CTR 默认拒绝进程内重叠计数器区间（需跨进程保证时配置共享 tracker）、解密缺 IV 显式报错、DER 签名自动检测、安全随机数生成、SM2 签名 60000+ 次零失败验证
+- **标准合规** — 通过 GM/T 0002/0003/0004 标准测试向量与 RFC 8998 SM4-GCM 官方向量验证
+- **安全** — PHP/GMP GCM 回退在解密前用 `hash_equals()` 比较标签，原生 OpenSSL GCM 后端执行认证解密；门面与低层 `Gcm` 默认检测进程内重复 key/IV；CTR 默认拒绝进程内重叠计数器区间（跨进程保证需配置共享 tracker）；解密缺 IV 显式报错、DER 签名自动检测、安全随机数生成
 - **正确性锚定** — GCM 另有 NIST SP 800-38D 规范直译参考模型差分测试（GcmReferenceModelTest）与解析器模糊测试（FuzzTest）
 - **优雅 API** — 门面 + 子系统双层 API，选项对象链式调用
 
@@ -440,7 +462,7 @@ composer install
 vendor/bin/phpunit
 ```
 
-720+ 测试，1,000,000+ 断言，覆盖全部标准测试向量。
+当前测试套件超过 1,000 项测试和 1,000,000 条断言，并包含标准向量与独立参考模型测试。
 
 ## 代码质量
 
@@ -460,7 +482,7 @@ composer check
 
 ## CI
 
-GitHub Actions 自动化流水线，每次 push/PR 自动运行：
+GitHub Actions 在推送到 `main`、向 `main` 提交 PR 时运行；发布工作流在 `main` 上手动触发：
 
 - **多版本测试** — PHP 8.2 / 8.3 / 8.4 / 8.5 矩阵测试
 - **静态分析** — PHPStan level 9 + PSR-12 代码风格检查
@@ -469,8 +491,8 @@ GitHub Actions 自动化流水线，每次 push/PR 自动运行：
 ## 文档
 
 - [SM2 详细文档](docs/sm2.md) — 密钥生成、加密/解密、签名/验签、PEM、密钥交换
-- [SM3 详细文档](docs/sm3.md) — 哈希计算、流式哈希、HMAC-SM3
-- [SM4 详细文档](docs/sm4.md) — 6 种加密模式、5 种填充方式
+- [SM3 详细文档](docs/sm3.md) — 哈希计算、流式哈希、HMAC-SM3、PBKDF2-HMAC-SM3
+- [SM4 详细文档](docs/sm4.md) — 六种门面模式、CCM、填充方式与安全追踪器
 - [变更日志](CHANGELOG.md)
 - [贡献指南](CONTRIBUTING.md)
 - [安全策略](SECURITY.md)

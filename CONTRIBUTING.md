@@ -51,7 +51,7 @@ Run all checks before submitting a PR:
 composer check
 ```
 
-This runs: `cs-check` → `analyse` → `test`
+This runs Composer validation, PHP syntax checks, `cs-check`, `analyse`, and the test suite.
 
 ## Pull Request Process
 
@@ -88,7 +88,7 @@ When adding a new cryptographic feature:
 1. **Follow the standard**: Reference the relevant GM/T standard document
 2. **Add standard test vectors**: Include official test vectors from the standard
 3. **Add round-trip tests**: Encrypt → Decrypt, Sign → Verify
-4. **Update SmCrypto facade**: Add a proxy method to the facade class
+4. **Update the facade when appropriate**: Add a `SmCrypto` proxy for features intended to be exposed through the facade; document direct subsystem APIs when they intentionally have a narrower boundary
 5. **Update documentation**: Add usage examples to `docs/` and `README.md`
 
 ## Security
