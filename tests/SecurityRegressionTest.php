@@ -2508,6 +2508,25 @@ class SecurityRegressionTest extends TestCase
 
     /** @runInSeparateProcess */
     #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
+    public function testGcmKeyCannotBeReusedToReadLegacyCbcCiphertext(): void
+    {
+        $key = str_repeat('77', 16);
+        $cbcKey = str_repeat('88', 16);
+        $legacyCiphertext = Sm4::encrypt(
+            'legacy CBC record',
+            $cbcKey,
+            (new Sm4Options())->setMode(Sm4::MODE_CBC)
+        );
+
+        Sm4::encrypt('new GCM record', $key);
+
+        $this->expectException(CryptoException::class);
+        $this->expectExceptionMessage('not registered for this decryption mode');
+        Sm4::decryptLegacyCbc($legacyCiphertext, $key);
+    }
+
+    /** @runInSeparateProcess */
+    #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
     public function testCcmAndGcmCannotReuseOneKey(): void
     {
         $key = str_repeat("\x6A", 16);
