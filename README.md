@@ -482,7 +482,7 @@ composer check
 
 ## CI
 
-GitHub Actions 在推送到 `main`、向 `main` 提交 PR 时运行；发布流程从 `main` 手动启动，CI 通过后创建版本 tag 和待审核 Draft Release，维护者审核后手动发布。操作步骤见[发布流程](docs/RELEASE.md)。
+GitHub Actions 在推送到 `main`、向 `main` 提交 PR 时运行；发布流程从 `main` 手动启动，CI 通过后创建版本 tag、更新变更日志并发布 Release。操作步骤见[发布流程](docs/RELEASE.md)。
 
 - **多版本测试** — PHP 8.2 / 8.3 / 8.4 / 8.5 矩阵测试
 - **静态分析** — PHPStan level 9 + PSR-12 代码风格检查
