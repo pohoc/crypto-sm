@@ -827,7 +827,7 @@ class SecurityRegressionTest extends TestCase
     #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
     public function testUnifiedStreamTrackerTakesPrecedenceOverDedicatedTrackers(): void
     {
-        $streamTracker = new class implements Sm4StreamBlockTrackerInterface {
+        $streamTracker = new class () implements Sm4StreamBlockTrackerInterface {
             /** @var list<array{key: string, firstBlock: string, count: int}> */
             public array $claims = [];
 
@@ -837,7 +837,7 @@ class SecurityRegressionTest extends TestCase
                 return true;
             }
         };
-        $ctrTracker = new class implements Sm4CtrCounterTrackerInterface {
+        $ctrTracker = new class () implements Sm4CtrCounterTrackerInterface {
             /** @var list<array{key: string, counter: string, count: int}> */
             public array $claims = [];
 
@@ -847,7 +847,7 @@ class SecurityRegressionTest extends TestCase
                 return true;
             }
         };
-        $feedbackTracker = new class implements Sm4FeedbackIvTrackerInterface {
+        $feedbackTracker = new class () implements Sm4FeedbackIvTrackerInterface {
             /** @var list<array{key: string, iv: string}> */
             public array $claims = [];
 
