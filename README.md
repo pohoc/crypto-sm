@@ -482,7 +482,7 @@ composer check
 
 ## CI
 
-GitHub Actions 在推送到 `main`、向 `main` 提交 PR 时运行；发布工作流在 `main` 上手动触发：
+GitHub Actions 在推送到 `main`、向 `main` 提交 PR 时运行；发布流程从 `main` 手动启动，CI 通过后创建版本 tag 并发布。操作步骤见[发布流程](docs/RELEASE.md)。
 
 - **多版本测试** — PHP 8.2 / 8.3 / 8.4 / 8.5 矩阵测试
 - **静态分析** — PHPStan level 9 + PSR-12 代码风格检查
@@ -493,6 +493,7 @@ GitHub Actions 在推送到 `main`、向 `main` 提交 PR 时运行；发布工�
 - [SM2 详细文档](docs/sm2.md) — 密钥生成、加密/解密、签名/验签、PEM、密钥交换
 - [SM3 详细文档](docs/sm3.md) — 哈希计算、流式哈希、HMAC-SM3、PBKDF2-HMAC-SM3
 - [SM4 详细文档](docs/sm4.md) — 六种门面模式、CCM、填充方式与安全追踪器
+- [发布流程](docs/RELEASE.md) — 发布前检查、版本 tag、changelog、恢复和标签保护
 - [变更日志](CHANGELOG.md)
 - [贡献指南](CONTRIBUTING.md)
 - [安全策略](SECURITY.md)
