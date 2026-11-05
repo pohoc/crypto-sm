@@ -827,54 +827,48 @@ class SecurityRegressionTest extends TestCase
     #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
     public function testUnifiedStreamTrackerTakesPrecedenceOverDedicatedTrackers(): void
     {
-        $streamClaims = [];
-        $ctrClaims = [];
-        $feedbackClaims = [];
-        Sm4::setStreamBlockTracker(new class ($streamClaims) implements Sm4StreamBlockTrackerInterface {
-            /** @param list<array{key: string, firstBlock: string, count: int}> $claims */
-            public function __construct(private array &$claims)
-            {
-            }
+        $streamTracker = new class implements Sm4StreamBlockTrackerInterface {
+            /** @var list<array{key: string, firstBlock: string, count: int}> */
+            public array $claims = [];
 
             public function claimRange(string $key, string $firstBlock, int $blockCount): bool
             {
                 $this->claims[] = ['key' => $key, 'firstBlock' => $firstBlock, 'count' => $blockCount];
                 return true;
             }
-        });
-        Sm4::setCtrCounterTracker(new class ($ctrClaims) implements Sm4CtrCounterTrackerInterface {
-            /** @param list<array{key: string, counter: string, count: int}> $claims */
-            public function __construct(private array &$claims)
-            {
-            }
+        };
+        $ctrTracker = new class implements Sm4CtrCounterTrackerInterface {
+            /** @var list<array{key: string, counter: string, count: int}> */
+            public array $claims = [];
 
             public function claimRange(string $key, string $initialCounter, int $blockCount): bool
             {
                 $this->claims[] = ['key' => $key, 'counter' => $initialCounter, 'count' => $blockCount];
                 return true;
             }
-        });
-        Sm4::setFeedbackIvTracker(new class ($feedbackClaims) implements Sm4FeedbackIvTrackerInterface {
-            /** @param list<array{key: string, iv: string}> $claims */
-            public function __construct(private array &$claims)
-            {
-            }
+        };
+        $feedbackTracker = new class implements Sm4FeedbackIvTrackerInterface {
+            /** @var list<array{key: string, iv: string}> */
+            public array $claims = [];
 
             public function claim(string $key, string $iv): bool
             {
                 $this->claims[] = ['key' => $key, 'iv' => $iv];
                 return true;
             }
-        });
+        };
+        Sm4::setStreamBlockTracker($streamTracker);
+        Sm4::setCtrCounterTracker($ctrTracker);
+        Sm4::setFeedbackIvTracker($feedbackTracker);
 
         Sm4::encrypt('ctr payload', str_repeat('12', 16), (new Sm4Options())
             ->setMode(Sm4::MODE_CTR)->setIv(str_repeat('00', 16)));
         Sm4::encrypt('ofb payload', str_repeat('34', 16), (new Sm4Options())
             ->setMode(Sm4::MODE_OFB)->setIv(str_repeat('56', 16)));
 
-        self::assertCount(2, $streamClaims);
-        self::assertSame([], $ctrClaims);
-        self::assertSame([], $feedbackClaims);
+        self::assertCount(2, $streamTracker->claims);
+        self::assertSame([], $ctrTracker->claims);
+        self::assertSame([], $feedbackTracker->claims);
     }
 
     /** @runInSeparateProcess */
