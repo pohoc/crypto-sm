@@ -47,7 +47,6 @@ jobs:
             *) echo "Unsupported event: $EVENT_NAME" >&2; exit 1 ;;
           esac
           [[ "$TAG" == v* ]]
-          php scripts/ReleaseVersion.php "${TAG#v}" --allow-existing >/dev/null
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -63,6 +62,7 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin main --prune --tags
+          php scripts/ReleaseVersion.php "${TAG#v}" --allow-existing >/dev/null
           SHA="$(git rev-parse "$TAG^{commit}")"
           test "$SHA" = "$(git rev-parse HEAD)"
           git merge-base --is-ancestor "$SHA" origin/main

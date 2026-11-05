@@ -108,10 +108,9 @@ jobs:
           SECURITY_RESULT: ${{ needs.security.result }}
         run: |
           set -euo pipefail
-          RESULTS="$(jq -cn \
-            --arg composer "$COMPOSER_RESULT" \
-            --arg tests "$TESTS_RESULT" \
-            --arg quality "$QUALITY_RESULT" \
-            --arg security "$SECURITY_RESULT" \
-            '{composer:$composer,tests:$tests,quality:$quality,security:$security}')"
-          php scripts/ReleaseVersion.php --ci-gate "$RESULTS"
+          for result in "$COMPOSER_RESULT" "$TESTS_RESULT" "$QUALITY_RESULT" "$SECURITY_RESULT"; do
+            if [[ "$result" != success ]]; then
+              echo "::error::Required CI job result: $result"
+              exit 1
+            fi
+          done

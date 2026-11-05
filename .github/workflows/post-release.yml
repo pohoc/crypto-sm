@@ -37,7 +37,7 @@ jobs:
             gh release view "$TAG" --json tagName,isDraft --jq "select(.isDraft == false) | .tagName" > "$RUNNER_TEMP/tag-name"
             test "$(cat "$RUNNER_TEMP/tag-name")" = "$TAG"
           fi
-          php scripts/ReleaseVersion.php "${TAG#v}" --allow-existing >/dev/null
+          [[ "$TAG" == v* ]]
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
