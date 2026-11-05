@@ -2,6 +2,11 @@
 
 本文件由脚本自动生成，基于 git tag 和 commit 记录。
 
+## [v0.4.2] - 2026-11-05
+
+### 文档
+- (changelog) update v0.4.1 release notes (#5)
+
 ## [v0.4.1] - 2026-11-05
 
 ### 变更
@@ -183,3 +188,4 @@
 [v0.3.0]: https://github.com/pohoc/crypto-sm/compare/v0.2.3...v0.3.0
 [v0.4.0]: https://github.com/pohoc/crypto-sm/compare/v0.3.0...v0.4.0
 [v0.4.1]: https://github.com/pohoc/crypto-sm/compare/v0.4.0...v0.4.1
+[v0.4.2]: https://github.com/pohoc/crypto-sm/compare/v0.4.1...v0.4.2
