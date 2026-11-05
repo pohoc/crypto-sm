@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: SemVer without v, for example 0.3.1
+        description: Strict SemVer without v, for example 0.4.0-rc.1
         required: true
         type: string
 
@@ -22,15 +22,18 @@ jobs:
     name: Validate release version
     runs-on: ubuntu-latest
     outputs:
-      tag: ${{ steps.version.outputs.tag }}
-      sha: ${{ steps.version.outputs.sha }}
+      tag: ${{ steps.state.outputs.tag }}
+      sha: ${{ steps.state.outputs.sha }}
+      main_sha: ${{ steps.state.outputs.main_sha }}
+      recovery: ${{ steps.state.outputs.recovery }}
+      complete: ${{ steps.state.outputs.complete }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: main
           fetch-depth: 0
-      - id: version
-        shell: bash
+      - name: Validate version and inspect existing release state
+        id: state
         env:
           VERSION: ${{ inputs.version }}
           EVENT_REF: ${{ github.ref }}
@@ -38,55 +41,89 @@ jobs:
         run: |
           set -euo pipefail
           test "$EVENT_REF" = 'refs/heads/main'
-          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]
           git fetch origin main --prune --tags
-          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+          MAIN_SHA="$(git rev-parse HEAD)"
+          test "$MAIN_SHA" = "$(git rev-parse origin/main)"
 
           OPEN_CHANGELOG_PRS="$(gh pr list --base main --state open --json headRefName --jq '[.[] | select(.headRefName | startswith("release/changelog-"))] | length')"
           if [[ "$OPEN_CHANGELOG_PRS" != 0 ]]; then
-            echo '::error::A release changelog PR is still open. Resolve that release before starting another.'
+            echo '::error::A release changelog PR is still open. Resolve or resume that release first.'
             exit 1
           fi
-
           ACTIVE_RELEASE_RUNS="$(gh run list --workflow release.yml --limit 20 --json status --jq '[.[] | select(.status == "queued" or .status == "in_progress" or .status == "waiting")] | length')"
           if [[ "$ACTIVE_RELEASE_RUNS" != 0 ]]; then
             echo '::error::A Release workflow is still running or waiting for approval.'
             exit 1
           fi
 
-          RELEASES="$(gh release list --limit 100 --json tagName --jq '.[].tagName')"
-          while IFS= read -r EXISTING_TAG; do
-            [[ -z "$EXISTING_TAG" ]] && continue
-            if ! grep -Fxq "$EXISTING_TAG" <<< "$RELEASES"; then
-              echo "::error::Tag $EXISTING_TAG has no GitHub Release. Resume it before starting another release."
+          mapfile -t TAGS < <(git tag --list 'v*')
+          VERSION="$(php scripts/ReleaseVersion.php "$VERSION" "${TAGS[@]}" --allow-existing)"
+          TAG="v$VERSION"
+          TAG_SHA=''
+          if git show-ref --verify --quiet "refs/tags/$TAG"; then
+            TAG_SHA="$(git rev-parse "$TAG^{commit}")"
+            git merge-base --is-ancestor "$TAG_SHA" origin/main
+          fi
+
+          RELEASE_JSON=''
+          if ! RELEASE_JSON="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" 2>&1)"; then
+            if ! grep -q 'HTTP 404' <<< "$RELEASE_JSON"; then
+              echo '::error::Could not determine the current GitHub Release state. No tag operation was attempted.'
               exit 1
             fi
-          done < <(git tag --list 'v*' | sort -V)
-
-          TAG="v$VERSION"
-          if git show-ref --tags --verify --quiet "refs/tags/$TAG"; then
-            echo "::error::Release tag $TAG already exists. Use the Release workflow to resume it."
-            exit 1
+            RELEASE_JSON=''
           fi
-          REMOTE_TAG="$(git ls-remote --tags origin "refs/tags/$TAG")"
-          if [[ -n "$REMOTE_TAG" ]]; then
-            echo "::error::Release tag $TAG already exists. Use the Release workflow to resume it."
-            exit 1
+          EXPECTED_SHA="$MAIN_SHA"
+          TAG_SHA_ARG='-'
+          if [[ -n "$TAG_SHA" ]]; then
+            EXPECTED_SHA="$TAG_SHA"
+            TAG_SHA_ARG="$TAG_SHA"
+          fi
+          RELEASE_FILE='-'
+          if [[ -n "$RELEASE_JSON" ]]; then
+            RELEASE_FILE="$RUNNER_TEMP/release.json"
+            printf '%s' "$RELEASE_JSON" > "$RELEASE_FILE"
+          fi
+          ACTION="$(php scripts/ReleaseVersion.php --release-state "$TAG" "$EXPECTED_SHA" "$TAG_SHA_ARG" "$RELEASE_FILE")"
+
+          if [[ "$ACTION" == draft-exists || "$ACTION" == published-exists ]]; then
+            {
+              echo "tag=$TAG"
+              echo "sha=$EXPECTED_SHA"
+              echo "main_sha=$MAIN_SHA"
+              echo 'recovery=false'
+              echo 'complete=true'
+            } >> "$GITHUB_OUTPUT"
+            echo "Matching Release exists ($ACTION); leaving it unchanged."
+            exit 0
           fi
 
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          TARGET_SHA="$EXPECTED_SHA"
+          RECOVERY=false
+          if [[ "$ACTION" == resume-release ]]; then
+            RECOVERY=true
+          fi
+          {
+            echo "tag=$TAG"
+            echo "sha=$TARGET_SHA"
+            echo "main_sha=$MAIN_SHA"
+            echo "recovery=$RECOVERY"
+            echo 'complete=false'
+          } >> "$GITHUB_OUTPUT"
 
   full-ci:
     needs: validate-version
+    if: needs.validate-version.outputs.complete != 'true'
     uses: ./.github/workflows/_ci.yml
     with:
       checkout-ref: ${{ needs.validate-version.outputs.sha }}
 
   create-tag-and-start-release:
-    name: Create tag and start Release workflow
+    name: Create or resume tag and start Release workflow
     needs: [validate-version, full-ci]
+    if: needs.validate-version.outputs.complete != 'true'
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
     steps:
@@ -94,24 +131,33 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-      - name: Create immutable version tag
+      - name: Create immutable tag or verify the existing tag
         env:
           TAG: ${{ needs.validate-version.outputs.tag }}
           EXPECTED_SHA: ${{ needs.validate-version.outputs.sha }}
+          EXPECTED_MAIN_SHA: ${{ needs.validate-version.outputs.main_sha }}
+          RECOVERY: ${{ needs.validate-version.outputs.recovery }}
         run: |
           set -euo pipefail
           git fetch origin main --prune --tags
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-          test "$(git rev-parse origin/main)" = "$EXPECTED_SHA"
-          REMOTE_TAG="$(git ls-remote --tags origin "refs/tags/$TAG")"
-          if [[ -n "$REMOTE_TAG" ]]; then
-            echo "::error::Release tag $TAG was created by another run."
+          if [[ "$RECOVERY" == false ]]; then
+            test "$(git rev-parse HEAD)" = "$EXPECTED_MAIN_SHA"
+            test "$(git rev-parse origin/main)" = "$EXPECTED_MAIN_SHA"
+          fi
+
+          if [[ "$RECOVERY" == false ]]; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git tag -a "$TAG" -m "Release $TAG" "$EXPECTED_SHA"
+            git push origin "$TAG" || echo 'Tag push returned an error; verifying remote state before deciding.'
+          fi
+
+          git fetch origin "refs/tags/$TAG:refs/verify-tags/$TAG"
+          ACTUAL_SHA="$(git rev-parse "refs/verify-tags/$TAG^{commit}")"
+          if [[ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]]; then
+            echo "::error::Tag $TAG resolves to $ACTUAL_SHA, expected $EXPECTED_SHA. No overwrite was attempted."
             exit 1
           fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git tag -a "$TAG" -m "Release $TAG"
-          git push origin "$TAG"
       - name: Dispatch tag-scoped Release workflow
         env:
           GH_TOKEN: ${{ github.token }}

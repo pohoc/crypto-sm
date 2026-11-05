@@ -21,6 +21,7 @@ declare(strict_types=1);
 
 $root = dirname(__DIR__);
 chdir($root);
+require_once __DIR__ . '/ReleaseVersion.php';
 
 $options = parseArgs($argv);
 $fromTag = $options['from'] ?? null;
@@ -116,8 +117,11 @@ function getTags(): array
     $tags = array_filter($output);
 
     // 语义化版本排序
-    usort($tags, function ($a, $b) {
-        return version_compare(ltrim($a, 'v'), ltrim($b, 'v'));
+    usort($tags, static function (string $a, string $b): int {
+        if (!str_starts_with($a, 'v') || !str_starts_with($b, 'v')) {
+            throw new RuntimeException('All changelog release tags must use v-prefixed SemVer.');
+        }
+        return ReleaseVersion::compare(substr($a, 1), substr($b, 1));
     });
 
     return $tags;

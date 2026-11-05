@@ -93,3 +93,25 @@ jobs:
           coverage: none
       - run: composer install --no-interaction --no-progress --prefer-dist
       - run: composer audit --no-interaction
+
+  gate:
+    name: CI Gate
+    if: ${{ always() }}
+    needs: [composer, tests, quality, security]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every quality and test job to succeed
+        env:
+          COMPOSER_RESULT: ${{ needs.composer.result }}
+          TESTS_RESULT: ${{ needs.tests.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          SECURITY_RESULT: ${{ needs.security.result }}
+        run: |
+          set -euo pipefail
+          RESULTS="$(jq -cn \
+            --arg composer "$COMPOSER_RESULT" \
+            --arg tests "$TESTS_RESULT" \
+            --arg quality "$QUALITY_RESULT" \
+            --arg security "$SECURITY_RESULT" \
+            '{composer:$composer,tests:$tests,quality:$quality,security:$security}')"
+          php scripts/ReleaseVersion.php --ci-gate "$RESULTS"

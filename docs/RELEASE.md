@@ -1,59 +1,52 @@
 # 发布流程
 
-正式发布由两个 GitHub Actions workflow 协作完成：维护者手动启动发布，工作流在 CI 通过后创建版本 tag，再由 Release workflow 生成变更日志并创建 GitHub Release。
+发布采用与 `sa-token` 相同的两阶段流程：**手动启动 → 完整 CI → 创建版本 tag → dispatch Release workflow → changelog PR 人工合并 → 创建 Draft Release → 人工审核并发布 → Packagist/Composer 验收**。
 
-## 发布前准备
+## 一键启动
 
-1. 确认要发布的代码已经合并到 `main`，且 `main` 上的 CI 全部通过。
-2. 确认版本号遵循 SemVer，输入时不带 `v`，例如 `0.3.1`。
-3. 检查提交标题。`scripts/changelog.php` 根据 tag 之间的提交标题生成变更日志：`feat`、`fix`、`docs`、`test` 等类型会分组；无法识别的提交归入“变更”，`style` 提交会忽略。
-
-## 标准发布
-
-1. 在 GitHub Actions 选择 **Start Release**，运行分支选 `main`，输入版本号，例如 `0.3.1`。也可以用 GitHub CLI 启动：
+1. 确认待发布代码已合并到 `main`。
+2. 在 GitHub Actions 运行 **Start Release**，运行分支选择 `main`，输入不带 `v` 的严格 SemVer，例如 `0.4.0-rc.1` 或 `0.4.0`。也可以运行：
 
    ```bash
-   gh workflow run "Start Release" --ref main -f version=0.3.1
+   gh workflow run "Start Release" --ref main -f version=0.4.0-rc.1
    ```
 
-2. **Start Release** 校验 `main`、版本号、未完成的发布和重复 tag，然后在记录的 `main` 提交上运行完整 CI。若 CI 期间 `main` 前进，工作流会停止，不会把 tag 指向未经验证的提交。
-3. CI 通过后，工作流创建不可变的 annotated tag（例如 `v0.3.1`），并发送 `repository_dispatch` 启动 **Release** workflow。
-4. **Release** 验证 tag 指向 `main` 上的提交，并检查 PHP 8.2、8.3、8.4、8.5 的最低/最高依赖测试、Composer 验证、静态分析/风格检查和 Composer audit 均通过。
-5. Release 调用 `composer changelog`（即 `php scripts/changelog.php`），根据 tag 和提交记录生成完整的 `CHANGELOG.md`，再从新版本章节提取 GitHub Release notes。
-6. 工作流创建 `release/changelog-v0.3.1` 分支和仅更新 `CHANGELOG.md` 的 PR，手动启动该 PR 的 CI。检查通过后工作流自动合并 PR，并在 `main` 确认该版本章节存在后创建 GitHub Release。
+3. 工作流检查版本格式、前导零、预发布标识和现有版本优先级；记录 `main` SHA 后运行完整 PHP 8.2–8.5、最低/最高依赖矩阵、Composer、静态分析/风格及安全审计。
+4. CI 通过后再次确认 `main` SHA 未变化，再创建不可变的 `v*` annotated tag。若 tag push 的响应不确定，工作流会查询远端 tag 指向；仅当 SHA 与测试 SHA 相同才继续，不会覆盖已有 tag。
+5. 因为 `GITHUB_TOKEN` 推送的 tag 不会自动触发另一个 `push` workflow，Start Release 会显式发送 `repository_dispatch`。人工推送的 `v*` tag 则由 `push.tags` 触发 Release workflow。
 
-如果仓库的 `release` environment 配置了 required reviewers，发布 job 会等待审批。`GITHUB_TOKEN` 推送 tag 不会自动启动另一个 `push` workflow，因此标准流程显式发送 `repository_dispatch`；手动推送 tag 则由 `push.tags: v*` 触发 Release workflow。
+## Release 与人工审核
 
-## 直接推送 tag
-
-已有 `main` CI 检查通过时，也可以手动创建并推送 tag：
-
-```bash
-git tag -a v0.3.1 -m "Release v0.3.1"
-git push origin v0.3.1
-```
-
-Release workflow 会复核 tag 格式、`main` 祖先关系和 CI 检查；校验不通过时不会创建 GitHub Release。由于 tag 已经创建，修复后应使用 **Release** workflow 手动恢复同一个 tag，不要移动或删除 tag。
+- Release workflow 确认 tag 位于 `main` 历史中，并要求同一 SHA 上的汇总检查 `full-ci / CI Gate` 成功。Gate 仅在 Composer 验证、全部 PHP 矩阵、质量检查和审计均成功时通过；失败、取消、跳过或缺失都阻止发布。
+- 工作流运行 `composer changelog` 更新版本日志，并创建只包含 `CHANGELOG.md` 的 PR；它会对 PR 手动触发 CI，但**不会自动合并**。维护者需检查并合并该 PR，然后在 Actions 用同一 tag 重新运行 **Release**。
+- changelog 已进入 `main` 后，工作流创建 GitHub **Draft Release**，包括 Breaking Changes、Migration Guide、Security Fixes、Upgrade Requirements 和提交变更章节。RC/Beta tag 会标为 Pre-release。
+- 维护者需在 Draft 中核对 tag、SHA、版本说明与迁移内容，补完章节后手动发布。正式版不会由 workflow 自动公开；发布时应确认是否设为 Latest。预发布版不得设为 Latest。
+- 相同 tag 的 Release 已存在时，workflow 检查状态并幂等退出，不会覆盖已有说明或创建第二个 Release。API 状态无法确认时会停止并要求先检查 GitHub 实际状态。
 
 ## 失败恢复
 
-- **Start Release 在创建 tag 前失败：**修复失败原因后重新运行 **Start Release**。只有远端尚无该版本 tag 时才能重新开始。
-- **tag 已创建，但 Release workflow 没启动或中途失败：**在 Actions 手动运行 **Release**，运行分支选 `main`，输入已有 tag（如 `v0.3.1`）。不要再次创建 tag。
-- **变更日志 PR 已存在：**修复或等待同一个 PR；重新运行 Release 时会检查 PR 内容是否与该 tag 生成结果一致，并再次执行 CI。
-- **变更日志 PR 已合并，但 GitHub Release 创建失败：**用同一 tag 重新运行 **Release**。工作流会识别 `main` 中已有的版本章节，然后继续发布。
-- **工作流等待环境审批：**在 GitHub Actions 对当前发布运行完成审批，不要并行启动另一个版本发布。
-- **tag 或发布说明有误：**不要重写或删除已发布 tag；准备修正版版本号并走一次新发布。
+- tag 创建前失败：修复原因后重跑 **Start Release**。
+- tag 已存在但 Release 尚未创建：用 **Release** workflow 选择 `main` 并输入同一 tag。工作流会验证 tag SHA 和既有 CI Gate，再继续。
+- changelog PR 已创建但尚未合并：检查并人工合并该 PR，然后以相同 tag 重跑 **Release**。
+- Draft Release 已创建：直接在 GitHub 审核和编辑原 Draft；不要用重跑覆盖人工修改。
+- GitHub API 写入结果不确定：先检查 tag/Release 页面。只在远端状态确认后恢复；不要删除或移动现有 tag。
+- Packagist 尚未同步：检查 Packagist 的 GitHub 自动更新连接，必要时在 Packagist 页面手动触发 **Update**；同步后用同一个已发布 tag 手动运行 **Post-release verification**。
 
-## 标签保护（一次性配置）
+## Packagist 与安装验收
 
-仓库提供 `scripts/setup-tag-protection.sh`，为 `v*` tag 配置 ruleset：要求上述 CI 检查成功，并禁止删除或更新 tag。需要仓库管理员 token；先确保 CI 已经运行过，以便 GitHub 已识别这些检查名称，然后执行：
+当前 `pohoc/crypto-sm` 在 Packagist 显示为自动同步包，发布 workflow 不使用 Packagist token，也不调用写入 API。GitHub Release 发布后，**Post-release verification** 会有限重试公开 Packagist 元数据，确认版本的 `dist.reference` 与 tag commit SHA 一致，然后在空白 Composer 项目中安装该精确版本，并再次核对 `composer.lock` 的版本和 SHA。
 
-```bash
-GH_TOKEN=YOUR_REPOSITORY_ADMIN_TOKEN bash scripts/setup-tag-protection.sh
-```
+若 Packagist 仍未出现目标 SHA，验收 workflow 会失败并提示人工同步；不会无限重试或报告成功。Composer 安装失败时，确认 PHP 8.4、GMP、OpenSSL 和 Packagist 同步状态后，用同一 tag 重跑 **Post-release verification**。
 
-脚本会创建或更新名为 `release-tags-require-ci` 的规则。规则在 GitHub 仓库级生效；该配置不是 workflow 自动完成的，执行后应到 **Settings → Rules → Rulesets** 确认规则状态和目标为 `v*` 的 tag。
+## GitHub 仓库手动配置
 
-## 发布范围
+这些配置需要仓库管理员在 **Settings** 中完成；本地 workflow 不会改写仓库规则。
 
-本仓库的 Release workflow 创建 GitHub Release，不直接调用 Packagist 发布 API。若 Packagist 已配置从 GitHub 自动同步，请在发布后确认新版本已同步；标签本身不会替代 Packagist 侧的同步配置。
+1. **Protect main**：当前规则只要求 `full-ci / Composer validation`、`full-ci / Static analysis and style`、`full-ci / Composer audit`。在新 Gate 首次成功出现后，将 `full-ci / CI Gate` 加为 Required status check；确认后再考虑移除旧的三个检查。保留旧检查直到 Gate 可选取，避免规则引用不存在的检查。将 Required approving reviews 设为至少 1，尤其是本 PR 包含密码算法实现改动。
+2. **Protect release tags**：当前 `v*` tag 规则已有禁止删除、更新及非快进，但还没有 Required status check，且当前用户可绕过。保留现有限制，增加 `full-ci / CI Gate`，并移除日常账号的绕过权限。应先确认该 check 已在 tag 目标 commit 上成功出现，再启用要求，避免阻塞发布。
+3. **release Environment**：创建或检查名为 `release` 的 Environment，为发布任务配置至少一名 Required reviewer，并限制允许部署的分支为 `main`。本环境审批覆盖创建 tag 和 Draft Release 两个 workflow job；最终公开仍由维护者手动发布 Draft。
+4. **Review**：确认 PR #3 至少有一位独立维护者审阅。当前 main Ruleset 的必需批准数为 0；仓库 API 连接不能读取 branch protection/environment 的全部设置，需在 GitHub UI 验证以上项目。
+
+## 版本建议
+
+当前正式版本为 `v0.3.0`。本次包含 PHP 最低版本提高至 8.2、SM4 默认格式与模式变化、SM2 签名默认语义变化等兼容性影响，建议以 `v0.4.0` 作为稳定版本目标。可先发布 `v0.4.0-rc.1` 做迁移验证，再审核和发布 `v0.4.0`。此处是版本建议，不会自动创建 tag 或 Release。
