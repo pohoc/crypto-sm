@@ -15,6 +15,7 @@ use CryptoSm\Interfaces\GcmIvTrackerInterface;
 use CryptoSm\Interfaces\GcmTagLengthTrackerInterface;
 use CryptoSm\Interfaces\Sm4CtrCounterTrackerInterface;
 use CryptoSm\Interfaces\Sm4FeedbackIvTrackerInterface;
+use CryptoSm\Interfaces\Sm4KeyModeTrackerInterface;
 use CryptoSm\Interfaces\Sm4StreamBlockTrackerInterface;
 use CryptoSm\SM2\KeyExchange;
 use CryptoSm\SM2\Keypair;
@@ -54,6 +55,12 @@ final class GcmTagProfileRegistry
  */
 class SecurityRegressionTest extends TestCase
 {
+    /** Fixed v0.3.0 default CBC payload: IV || ciphertext, generated with PKCS5 padding. */
+    private const HISTORICAL_CBC_KEY_HEX = '00112233445566778899aabbccddeeff';
+
+    private const HISTORICAL_CBC_PAYLOAD_HEX = '4257693c4857b52bc1acf9871eaa41b7'
+        . '9be3d77841130ad1094300f8e7f4bed1e2f15d4d60bd62261039437434cbf0b8';
+
     public function testSm2KeyExchangeRejectsAllZeroKdfOutput(): void
     {
         $reject = new \ReflectionMethod(KeyExchange::class, 'rejectAllZeroDerivedKey');
@@ -869,6 +876,128 @@ class SecurityRegressionTest extends TestCase
         self::assertCount(2, $streamTracker->claims);
         self::assertSame([], $ctrTracker->claims);
         self::assertSame([], $feedbackTracker->claims);
+    }
+
+    /** @runInSeparateProcess */
+    #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
+    public function testUnifiedStreamTrackerAndFeedbackTrackerProtectTheirOwnModes(): void
+    {
+        $keyModeTracker = new class () implements Sm4KeyModeTrackerInterface {
+            /** @var array<string, string> */
+            public array $modes = [];
+
+            public function claimMode(string $keyFingerprint, string $mode): bool
+            {
+                $registered = $this->modes[$keyFingerprint] ?? null;
+                if ($registered !== null) {
+                    return $registered === $mode;
+                }
+                $this->modes[$keyFingerprint] = $mode;
+
+                return true;
+            }
+
+            public function isModeAllowed(string $keyFingerprint, string $mode): bool
+            {
+                return ($this->modes[$keyFingerprint] ?? null) === $mode;
+            }
+        };
+        $streamTracker = new class () implements Sm4StreamBlockTrackerInterface {
+            /** @var list<array{key: string, firstBlock: string, count: int}> */
+            public array $claims = [];
+
+            public function claimRange(string $key, string $firstBlock, int $blockCount): bool
+            {
+                $this->claims[] = ['key' => $key, 'firstBlock' => $firstBlock, 'count' => $blockCount];
+
+                return true;
+            }
+        };
+        $feedbackTracker = new class () implements Sm4FeedbackIvTrackerInterface {
+            /** @var list<array{key: string, iv: string}> */
+            public array $claims = [];
+
+            /** @var list<array{key: string, iv: string}> */
+            public array $attempts = [];
+
+            /** @var array<string, true> */
+            private array $seen = [];
+
+            public ?string $throwOnIv = null;
+
+            public function claim(string $key, string $iv): bool
+            {
+                $claim = ['key' => $key, 'iv' => $iv];
+                $this->attempts[] = $claim;
+                if ($this->throwOnIv !== null && hash_equals($this->throwOnIv, $iv)) {
+                    throw new \RuntimeException('shared feedback tracker unavailable');
+                }
+
+                $pair = hash('sha256', $key . $iv);
+                if (isset($this->seen[$pair])) {
+                    return false;
+                }
+                $this->seen[$pair] = true;
+                $this->claims[] = $claim;
+
+                return true;
+            }
+        };
+
+        Sm4::setKeyModeTracker($keyModeTracker);
+        Sm4::setStreamBlockTracker($streamTracker);
+        Sm4::setFeedbackIvTracker($feedbackTracker);
+
+        $ctrKey = str_repeat('11', 16);
+        $ofbKey = str_repeat('22', 16);
+        $cfbKey = str_repeat('33', 16);
+        $cbcKey = str_repeat('44', 16);
+        $ctrIv = str_repeat('01', 16);
+        $ofbIv = str_repeat('02', 16);
+        $cfbIv = str_repeat('03', 16);
+        $cbcIv = str_repeat('04', 16);
+        $cbcFailureIv = str_repeat('05', 16);
+
+        Sm4::encrypt('CTR input block!', $ctrKey, (new Sm4Options())->setMode(Sm4::MODE_CTR)->setIv($ctrIv));
+        Sm4::encrypt('OFB input block!', $ofbKey, (new Sm4Options())->setMode(Sm4::MODE_OFB)->setIv($ofbIv));
+        Sm4::encrypt('CFB input block!', $cfbKey, (new Sm4Options())->setMode(Sm4::MODE_CFB)->setIv($cfbIv));
+        Sm4::encrypt('CBC plaintext', $cbcKey, (new Sm4Options())->setMode(Sm4::MODE_CBC)->setIv($cbcIv));
+
+        self::assertSame([
+            ['key' => hex2bin($ctrKey), 'firstBlock' => hex2bin($ctrIv), 'count' => 1],
+            ['key' => hex2bin($ofbKey), 'firstBlock' => hex2bin($ofbIv), 'count' => 1],
+            ['key' => hex2bin($cfbKey), 'firstBlock' => hex2bin($cfbIv), 'count' => 1],
+        ], $streamTracker->claims, 'Only CTR/OFB/CFB block inputs belong to the unified stream tracker');
+        self::assertSame([['key' => hex2bin($cbcKey), 'iv' => hex2bin($cbcIv)]], $feedbackTracker->claims);
+        self::assertCount(4, $keyModeTracker->modes, 'Each mode must be pinned to a distinct key');
+
+        try {
+            Sm4::encrypt('CBC repeated IV', $cbcKey, (new Sm4Options())->setMode(Sm4::MODE_CBC)->setIv($cbcIv));
+            self::fail('The feedback tracker must reject a repeated CBC key/IV pair');
+        } catch (CryptoException $exception) {
+            self::assertStringContainsString('SM4-CBC IV reuse detected or tracker rejected', $exception->getMessage());
+        }
+        self::assertSame([
+            ['key' => hex2bin($cbcKey), 'iv' => hex2bin($cbcIv)],
+            ['key' => hex2bin($cbcKey), 'iv' => hex2bin($cbcIv)],
+        ], $feedbackTracker->attempts, 'CBC must submit every IV attempt to the feedback tracker');
+
+        $cbcFailureIvBin = hex2bin($cbcFailureIv);
+        self::assertIsString($cbcFailureIvBin);
+        $feedbackTracker->throwOnIv = $cbcFailureIvBin;
+        try {
+            Sm4::encrypt('CBC tracker failure', $cbcKey, (new Sm4Options())->setMode(Sm4::MODE_CBC)->setIv($cbcFailureIv));
+            self::fail('CBC encryption must stop when the feedback tracker fails');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('shared feedback tracker unavailable', $exception->getMessage());
+        }
+
+        self::assertSame([
+            ['key' => hex2bin($cbcKey), 'iv' => hex2bin($cbcIv)],
+            ['key' => hex2bin($cbcKey), 'iv' => hex2bin($cbcIv)],
+            ['key' => hex2bin($cbcKey), 'iv' => hex2bin($cbcFailureIv)],
+        ], $feedbackTracker->attempts);
+        self::assertCount(3, $streamTracker->claims, 'CBC must never be submitted to the unified stream tracker');
     }
 
     /** @runInSeparateProcess */
@@ -2558,11 +2687,8 @@ class SecurityRegressionTest extends TestCase
     #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
     public function testGcmKeyCannotBeReusedToReadLegacyCbcCiphertext(): void
     {
-        // Generated by v0.3.0's default Sm4::encrypt() using this same key:
-        // IV || CBC ciphertext, with PKCS5 padding.
-        $key = '00112233445566778899aabbccddeeff';
-        $legacyCiphertext = '4257693c4857b52bc1acf9871eaa41b7'
-            . '9be3d77841130ad1094300f8e7f4bed1e2f15d4d60bd62261039437434cbf0b8';
+        $key = self::HISTORICAL_CBC_KEY_HEX;
+        $legacyCiphertext = self::HISTORICAL_CBC_PAYLOAD_HEX;
 
         self::assertSame('historical CBC payload', Sm4::decryptLegacyCbc($legacyCiphertext, $key));
 
@@ -2571,6 +2697,60 @@ class SecurityRegressionTest extends TestCase
         $this->expectException(CryptoException::class);
         $this->expectExceptionMessage('not registered for this decryption mode');
         Sm4::decryptLegacyCbc($legacyCiphertext, $key);
+    }
+
+    /** @runInSeparateProcess */
+    #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
+    public function testLegacyCbcMigrationUsesTrustedSeparateCbcAndGcmKeys(): void
+    {
+        $keyModeTracker = new class () implements Sm4KeyModeTrackerInterface {
+            /** @var array<string, string> */
+            public array $modes = [];
+
+            public function claimMode(string $keyFingerprint, string $mode): bool
+            {
+                $registered = $this->modes[$keyFingerprint] ?? null;
+                if ($registered !== null) {
+                    return $registered === $mode;
+                }
+                $this->modes[$keyFingerprint] = $mode;
+
+                return true;
+            }
+
+            public function isModeAllowed(string $keyFingerprint, string $mode): bool
+            {
+                return ($this->modes[$keyFingerprint] ?? null) === $mode;
+            }
+        };
+        Sm4::setKeyModeTracker($keyModeTracker);
+
+        $oldCbcKey = self::HISTORICAL_CBC_KEY_HEX;
+        $newGcmKey = '102132435465768798a9bacbdcedfe0f';
+        Sm4::registerKeyMode($oldCbcKey, Sm4::MODE_CBC);
+        Sm4::registerKeyMode($newGcmKey, Sm4::MODE_GCM);
+
+        $oldCbcKeyBin = hex2bin($oldCbcKey);
+        $newGcmKeyBin = hex2bin($newGcmKey);
+        self::assertIsString($oldCbcKeyBin);
+        self::assertIsString($newGcmKeyBin);
+        self::assertSame(Sm4::MODE_CBC, $keyModeTracker->modes[hash('sha256', $oldCbcKeyBin, true)]);
+        self::assertSame(Sm4::MODE_GCM, $keyModeTracker->modes[hash('sha256', $newGcmKeyBin, true)]);
+
+        self::assertSame(
+            'historical CBC payload',
+            Sm4::decryptLegacyCbc(self::HISTORICAL_CBC_PAYLOAD_HEX, $oldCbcKey)
+        );
+
+        $newCiphertext = Sm4::encrypt('new GCM record', $newGcmKey);
+        self::assertSame('new GCM record', Sm4::decrypt($newCiphertext, $newGcmKey));
+
+        try {
+            Sm4::decryptLegacyCbc(self::HISTORICAL_CBC_PAYLOAD_HEX, $newGcmKey);
+            self::fail('Legacy CBC decryption must use its trusted CBC key, not the GCM key');
+        } catch (CryptoException $exception) {
+            self::assertStringContainsString('not registered for this decryption mode', $exception->getMessage());
+        }
     }
 
     /** @runInSeparateProcess */

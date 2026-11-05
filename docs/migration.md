@@ -17,13 +17,13 @@
 
 ## SM4 默认密文格式
 
-当前 `Sm4::encrypt()`、`Sm4Options` 和 `Sm4::encryptPayload()` 默认使用 GCM。无选项 `Sm4::encrypt()` 输出自包含的 `SM4GCM2` 格式，包含版本标记、IV、密文和认证标签。旧版本默认使用 CBC，旧自包含 CBC 密文应通过 `Sm4::decryptLegacyCbc($ciphertext, $key)` 读取；这是未认证的兼容解密入口，应用应在可信数据迁移流程中使用。
+当前 `Sm4::encrypt()`、`Sm4Options` 和 `Sm4::encryptPayload()` 默认使用 GCM。无选项 `Sm4::encrypt()` 输出自包含的 `SM4GCM2` 格式，包含版本标记、IV、密文和认证标签。旧版本默认使用 CBC，旧自包含 CBC 密文只能在可信记录确认其格式和密钥后，通过显式的 `Sm4::decryptLegacyCbc($ciphertext, $oldCbcKey)` 读取；此入口不提供认证。不能根据未认证密文内容自动选择 CBC/GCM 模式或尝试不同密钥。
 
 - 默认模式已改变。需要保持旧 CBC 写入协议的调用点，必须显式创建 `Sm4Options` 并设置 `Sm4::MODE_CBC`，同时自行确保 IV 安全性和密文完整性保护。
 - 新 GCM 密文不可被旧版 CBC 默认解密器读取。SM4 模式隔离保护会拒绝同一密钥先用于 GCM 加密、再用于 CBC 解密；这项保护是有意的，不能通过关闭隔离来绕过。双读迁移必须给新 GCM 配置独立的新密钥/密钥版本，并保留受控的旧 CBC 只读密钥，或使用隔离的旧数据迁移服务批量解密并用新 GCM 密钥重加密。若旧密钥已登记为 GCM，不要再在同一常规服务中读取旧 CBC 数据。
 - 建议迁移顺序：部署能按可信记录版本选择密钥的双读程序；新写入只使用新 GCM 密钥；旧 CBC 只由受控迁移路径读取并转写；核对完成后停用旧密钥。不能仅凭密文前缀或未认证元数据决定密钥/模式。
 - 结构化 payload 的解密模式必须来自可信配置。不要根据未认证密文中的字段自动切换模式。
-- 当前仍支持读取 `SM4GCM1` 旧 GCM 格式和自包含旧 CBC 格式；其他外部封装或自定义 CBC payload 应按旧协议显式解析，并验证其完整性后再解密。
+- 当前仍支持读取 `SM4GCM1` 旧 GCM 格式，并提供显式的 `Sm4::decryptLegacyCbc()` 读取自包含旧 CBC 格式；CBC 模式和旧密钥必须由可信记录选择。其他外部封装或自定义 CBC payload 应按旧协议显式解析，并验证其完整性后再解密。
 
 ## 多进程和长驻 worker 的共享追踪器
 
@@ -37,8 +37,8 @@ GCM/CCM 和传统 SM4 模式的默认追踪状态只在当前 PHP 进程内有�
 | `CcmTagLengthTrackerInterface` | 每把密钥固定的 CCM 标签长度 |
 | `CcmBlockUsageTrackerInterface` | 每把密钥累计 CCM 分组调用数，不超过 `2^61`；加密和解密都计数，认证失败也计数 |
 | `Sm4KeyModeTrackerInterface` | 每把密钥固定一个模式，跨进程隔离 ECB/CBC/CFB/OFB/CTR/GCM/CCM/raw-block |
-| `Sm4FeedbackIvTrackerInterface` | CBC IV/CFB/OFB 初始 IV；跨进程 IV 去重。单独使用时不替代 CFB/OFB 实际反馈分组输入追踪 |
-| `Sm4StreamBlockTrackerInterface` | CTR 计数器区间及 CFB/OFB 实际使用的分组输入；配置后会优先处理这些模式的共享分组输入追踪，并跳过对应的专用 tracker |
+| `Sm4FeedbackIvTrackerInterface` | CBC IV 始终由此接口跨进程去重；仅当未配置统一流 tracker 时，也负责 CFB/OFB 初始 IV 去重。它本身不替代 CFB/OFB 实际反馈分组输入追踪 |
+| `Sm4StreamBlockTrackerInterface` | 仅负责 CTR、CFB、OFB 的分组输入；配置后接管这三种模式的共享分组输入追踪，跳过 CTR 专用 tracker 和 CFB/OFB 初始 IV 的反馈 tracker 调用。CBC 独立走 IV 去重路径，不受它覆盖 |
 | `Sm4CtrCounterTrackerInterface` | 仅 CTR 计数器范围去重；仅在未配置统一流分组 tracker 时作为 CTR 专用共享方案 |
 
 模式选择与组合：
@@ -47,12 +47,12 @@ GCM/CCM 和传统 SM4 模式的默认追踪状态只在当前 PHP 进程内有�
 | --- | --- |
 | GCM | `GcmIvTrackerInterface` + `GcmTagLengthTrackerInterface`；需要跨进程模式隔离时再加 `Sm4KeyModeTrackerInterface` |
 | CCM | `CcmNonceTrackerInterface` + `CcmTagLengthTrackerInterface` + `CcmBlockUsageTrackerInterface`；需要跨进程模式隔离时再加 `Sm4KeyModeTrackerInterface` |
-| CBC | `Sm4FeedbackIvTrackerInterface`；需要跨进程模式隔离时加 `Sm4KeyModeTrackerInterface` |
-| CFB/OFB | 配置 `Sm4StreamBlockTrackerInterface` 时，它从初始 IV 到后续反馈输入统一去重，`Sm4FeedbackIvTrackerInterface` 不会再被调用。未配置统一 tracker 时，可用 `Sm4FeedbackIvTrackerInterface` 协调初始 IV，但库还会保留进程内反馈输入去重；需要跨进程完整协调时应选统一 tracker |
+| CBC | `Sm4FeedbackIvTrackerInterface` 始终负责跨进程 CBC IV 去重；需要跨进程模式隔离时加 `Sm4KeyModeTrackerInterface`。统一流 tracker 不保护 CBC |
+| CFB/OFB | 配置 `Sm4StreamBlockTrackerInterface` 时，它从初始 IV 到后续反馈输入统一去重，并覆盖这两种模式对 `Sm4FeedbackIvTrackerInterface` 的调用。未配置统一 tracker 时，可由反馈 IV tracker 协调初始 IV，库另行保留进程内反馈输入去重；需要跨进程完整协调时应选统一 tracker |
 | CTR | `Sm4StreamBlockTrackerInterface` 优先级最高；未配置它时，`Sm4CtrCounterTrackerInterface` 作为 CTR 专用共享 tracker 并替代本地 CTR 区间表；二者不要同时配置。需要跨模式隔离时另加 `Sm4KeyModeTrackerInterface` |
 | ECB/raw-block | 使用独立密钥并配置 `Sm4KeyModeTrackerInterface` 做跨进程隔离；ECB 不具备语义安全性，不推荐新业务使用 |
 
-以上 tracker 均由应用实现。优先级规则是：`Sm4KeyModeTrackerInterface` 独立负责模式隔离；`Sm4StreamBlockTrackerInterface` 配置后接管 CTR/CFB/OFB 分组输入追踪，CTR 专用 tracker 和 CFB/OFB 初始 IV tracker 不会收到这些调用；未配置统一 tracker 时，CTR 才使用 CTR 专用 tracker，CFB/OFB 才可能调用反馈 IV tracker。不要把统一 tracker 和被它覆盖的专用 tracker 一起配置并误以为两者都会运行。
+以上 tracker 均由应用实现。优先级规则是：`Sm4KeyModeTrackerInterface` 独立负责模式隔离；`Sm4StreamBlockTrackerInterface` 只接管 CTR/CFB/OFB 分组输入追踪，覆盖 CTR 专用 tracker 和 CFB/OFB 初始 IV tracker 对这些模式的调用；CBC 始终独立调用 `Sm4FeedbackIvTrackerInterface`。混合部署可以同时配置统一流 tracker 和反馈 IV tracker：前者保护 CTR/CFB/OFB 分组输入，后者仍保护 CBC IV。不要据此认为统一流 tracker 保护 CBC，也不要把它与被覆盖的 CTR/CFB/OFB 专用 tracker 一起配置并误以为两者都会运行。
 
 需要给仅解密的历史密钥使用共享模式 tracker 时，应从可信密钥配置在启动阶段调用 `Sm4::registerKeyMode($keyHex, $mode)` 预登记；不能从待解密数据推断并登记模式。旧 CBC 密钥和新 GCM 密钥必须分开登记、分开管理：
 
@@ -84,12 +84,13 @@ Ccm::setTagLengthTracker($applicationCcmTagLengthTracker);
 Ccm::setBlockUsageTracker($applicationCcmBlockUsageTracker);
 
 Sm4::setKeyModeTracker($applicationKeyModeTracker);
-Sm4::setStreamBlockTracker($applicationStreamBlockTracker); // 启用后接管 CTR/CFB/OFB 分组追踪
+Sm4::setStreamBlockTracker($applicationStreamBlockTracker); // 负责 CTR/CFB/OFB 分组输入追踪
+Sm4::setFeedbackIvTracker($applicationFeedbackIvTracker); // CBC 仍通过它做跨进程 IV 去重
 
-// 仅在未配置统一流 tracker、且部署只用 CTR 时改用专用 tracker：
+// 仅在未配置统一流 tracker、且部署只用 CTR 时才使用 CTR 专用 tracker：
 // Sm4::setCtrCounterTracker($applicationCtrCounterTracker);
-// 未配置统一流 tracker 时，CBC 初始 IV 可使用：
-// Sm4::setFeedbackIvTracker($applicationFeedbackIvTracker);
+// 统一流 tracker 配置后会覆盖 CFB/OFB 的反馈 IV tracker 调用，
+// 但不覆盖上面 CBC 独立使用的反馈 IV tracker。
 
 // 旧 CBC 与新 GCM 使用不同密钥，按可信配置分别登记：
 Sm4::registerKeyMode($oldCbcKeyHex, Sm4::MODE_CBC);

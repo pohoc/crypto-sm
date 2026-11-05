@@ -146,19 +146,23 @@ CTR 加密会按密钥登记实际消耗的 128 位计数器区间；CFB/OFB 加
 
 跨进程或重启仍复用 SM4 key 时，必须在应用启动阶段配置持久化的 `Sm4KeyModeTrackerInterface`，并让所有 worker 共享同一原子 key-to-mode 记录。它收到的是原始 32 字节 SHA-256 key 指纹和模式名；同一 key 的同模式重复 claim 必须成功，跨模式 claim 必须失败。加密会原子 claim 模式；解密只调用只读 `isModeAllowed()`，不会因未认证输入创建或修改记录，因此解密专用的既有 key 必须由可信配置通过 `Sm4::registerKeyMode()` 预登记。不要用未经认证的 payload 元数据选择解密模式。该接口负责协调 ECB、CBC、CFB、OFB、CTR、GCM、CCM 与 `raw-block`，但不能代替各模式自己的 IV、nonce、计数器及用量 tracker。
 
-流模式追踪器的优先级必须按实现配置：`Sm4KeyModeTrackerInterface` 独立负责模式隔离；配置 `Sm4StreamBlockTrackerInterface` 后，它接管 CTR/CFB/OFB 的分组输入追踪，CTR 专用 `Sm4CtrCounterTrackerInterface` 和 CFB/OFB 初始 IV `Sm4FeedbackIvTrackerInterface` 不会收到相应调用。未配置统一流 tracker 时，CTR 才能使用专用 CTR tracker；CFB/OFB 的 feedback IV tracker 只协调初始 IV，进程内反馈输入范围仍由库登记。不要同时配置统一流 tracker 和被覆盖的专用 tracker 并假定它们会叠加。
+追踪器的职责按模式区分：`Sm4KeyModeTrackerInterface` 独立负责模式隔离；`Sm4StreamBlockTrackerInterface` 只接管 CTR/CFB/OFB 的分组输入追踪。配置后，CTR 专用 `Sm4CtrCounterTrackerInterface` 和 CFB/OFB 初始 IV 的 `Sm4FeedbackIvTrackerInterface` 调用会被覆盖；CBC 走独立的 `claimCbcIv()` 路径，不受统一流 tracker 覆盖，仍由 `Sm4FeedbackIvTrackerInterface` 跨进程去重。因此混合部署可以同时配置统一流 tracker 和反馈 IV tracker：前者负责 CTR/CFB/OFB，后者仍负责 CBC。未配置统一流 tracker 时，CTR 才能使用专用 CTR tracker；CFB/OFB 的反馈 IV tracker 只协调初始 IV，进程内反馈输入范围仍由库登记。不要把统一流 tracker 当作 CBC IV 保护，也不要同时配置统一流 tracker 和被覆盖的 CTR/CFB/OFB 专用追踪器并假定它们会叠加。
 
 ```php
 use CryptoSm\SM4\Sm4;
 use CryptoSm\Interfaces\Sm4KeyModeTrackerInterface;
 use CryptoSm\Interfaces\Sm4StreamBlockTrackerInterface;
+use CryptoSm\Interfaces\Sm4FeedbackIvTrackerInterface;
 
 Sm4::setKeyModeTracker($sharedKeyModeTracker);
-Sm4::setStreamBlockTracker($sharedStreamBlockTracker);
+Sm4::setStreamBlockTracker($sharedStreamBlockTracker); // CTR、CFB、OFB 分组输入
+Sm4::setFeedbackIvTracker($sharedFeedbackIvTracker);   // CBC 跨进程 IV 去重仍由它负责
 // 仅解密的旧 key 按真实历史模式登记，不能一律登记为 GCM：
 Sm4::registerKeyMode($oldCbcKeyHex, Sm4::MODE_CBC);
 Sm4::registerKeyMode($existingGcmKeyHex, Sm4::MODE_GCM); // 另一把 key
 ```
+
+同一服务同时运行流模式和 CBC 时，也应让不同模式使用不同密钥；统一流 tracker 只协调 CTR/CFB/OFB，不能代替 CBC 的反馈 IV tracker。
 
 如果部署仅使用 CTR，且没有配置 `Sm4StreamBlockTrackerInterface`，可使用 CTR 专用 tracker。它负责跨进程协调 CTR 区间并替代本地 CTR 区间历史，因此不会受本地 65,536 条区间上限影响。配置统一流 tracker 时，此专用 tracker 不会被调用。它不会协调 CFB/OFB，也不替代 key-mode tracker 的跨模式隔离：
 

@@ -70,6 +70,38 @@ class GcmReferenceModelTest extends TestCase
         $this->assertRfc8998Sm4GcmVector();
     }
 
+    public function testNativeOpenSslSm4GcmRejectsAuthenticatedInputTamperingWhenAvailable(): void
+    {
+        $available = new \ReflectionMethod(Gcm::class, 'openSslGcmAvailable');
+        $available->setAccessible(true);
+        if (!$available->invoke(null)) {
+            $this->markTestSkipped('OpenSSL SM4-GCM AEAD is not executable in this environment');
+        }
+
+        $vector = $this->assertRfc8998Sm4GcmVector();
+        $badCiphertext = $vector['ciphertext'];
+        $badCiphertext[0] = $badCiphertext[0] === "\0" ? "\1" : "\0";
+        $badIv = $vector['iv'];
+        $badIv[0] = $badIv[0] === "\0" ? "\1" : "\0";
+        $badAad = $vector['aad'] . "\0";
+        $badTag = $vector['tag'];
+        $badTag[0] = $badTag[0] === "\0" ? "\1" : "\0";
+
+        foreach ([
+            [$badCiphertext, $vector['tag'], $vector['iv'], $vector['aad'], 'ciphertext'],
+            [$vector['ciphertext'], $vector['tag'], $badIv, $vector['aad'], 'IV'],
+            [$vector['ciphertext'], $vector['tag'], $vector['iv'], $badAad, 'AAD'],
+            [$vector['ciphertext'], $badTag, $vector['iv'], $vector['aad'], 'tag'],
+        ] as [$ciphertext, $tag, $iv, $aad, $field]) {
+            try {
+                Gcm::fromKey($vector['key'])->decrypt($ciphertext, $tag, $iv, $aad, 16);
+                self::fail('Native OpenSSL GCM accepted tampered ' . $field);
+            } catch (\CryptoSm\Exception\CryptoException $exception) {
+                self::assertStringContainsString('authentication tag mismatch', $exception->getMessage());
+            }
+        }
+    }
+
     /** @runInSeparateProcess */
     #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
     public function testPurePhpGcmVectorWhenNativeAeadIsUnavailable(): void
@@ -84,7 +116,10 @@ class GcmReferenceModelTest extends TestCase
         $this->assertRfc8998Sm4GcmVector();
     }
 
-    private function assertRfc8998Sm4GcmVector(): void
+    /**
+     * @return array{key: string, iv: string, aad: string, ciphertext: string, tag: string}
+     */
+    private function assertRfc8998Sm4GcmVector(): array
     {
         $key = self::hexBytes('0123456789ABCDEFFEDCBA9876543210');
         $iv  = self::hexBytes('00001234567800000000ABCD');
@@ -96,6 +131,10 @@ class GcmReferenceModelTest extends TestCase
         $aad = self::hexBytes('FEEDFACEDEADBEEFFEEDFACEDEADBEEFABADDAD2');
 
         $r = Gcm::fromKey($key)->encrypt($pt, $iv, $aad, 16);
+        $reference = self::referenceEncrypt($key, $iv, $aad, $pt, 16);
+
+        $this->assertSame($reference['ciphertext'], $r['ciphertext'], 'GCM backend differs from PHP/GMP reference ciphertext');
+        $this->assertSame($reference['tag'], $r['tag'], 'GCM backend differs from PHP/GMP reference tag');
 
         $this->assertSame(
             strtolower('17F399F08C67D5EE19D0DC9969C4BB7D'
@@ -120,6 +159,8 @@ class GcmReferenceModelTest extends TestCase
             16
         );
         $this->assertSame(bin2hex($pt), bin2hex((string) $ptBack));
+
+        return ['key' => $key, 'iv' => $iv, 'aad' => $aad, 'ciphertext' => $r['ciphertext'], 'tag' => $r['tag']];
     }
 
     // ─── 独立参考模型（GMP 整数、规范直译）───────────────────────────────
