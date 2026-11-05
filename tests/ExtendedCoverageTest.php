@@ -235,7 +235,7 @@ class ExtendedCoverageTest extends TestCase
 
     public function testSm4GcmValidTagLengths(): void
     {
-        foreach ([4, 8, 12, 13, 14, 15, 16] as $tagLen) {
+        foreach ([12, 13, 14, 15, 16] as $tagLen) {
             $opts = (new Sm4Options())->setMode(Sm4::MODE_GCM)->setTagLength($tagLen);
             $this->assertEquals($tagLen, $opts->getTagLength());
         }
@@ -441,11 +441,11 @@ class ExtendedCoverageTest extends TestCase
     {
         // Zero padding 会 trim 所有尾部 \0，数据末尾有 \0 会被截断
         $key = bin2hex(random_bytes(16));
-        $iv = (new Sm4Options())->setPadding('zero')->getIv();
+        $iv = (new Sm4Options())->setMode(Sm4::MODE_CBC)->setPadding('zero')->getIv();
         $msg = 'hello' . "\0\0"; // 末尾有 \0
-        $opts = (new Sm4Options())->setPadding('zero')->setIv($iv);
+        $opts = (new Sm4Options())->setMode(Sm4::MODE_CBC)->setPadding('zero')->setIv($iv);
         $ct = Sm4::encrypt($msg, $key, $opts);
-        $pt = Sm4::decrypt($ct, $key, (new Sm4Options())->setPadding('zero')->setIv($iv));
+        $pt = Sm4::decrypt($ct, $key, (new Sm4Options())->setMode(Sm4::MODE_CBC)->setPadding('zero')->setIv($iv));
         // zero padding 的已知限制：末尾 \0 会被 trim
         $this->assertStringStartsWith('hello', $pt);
     }
@@ -499,16 +499,17 @@ class ExtendedCoverageTest extends TestCase
 
     // ─── Sm4Options GCM IV 自动生成长度 ──────────────────────────────────
 
-    public function testSm4OptionsGcmAutoIvIs24HexChars(): void
+    public function testSm4OptionsGcmAutoIvUsesReserved128BitFormat(): void
     {
         $opts = (new Sm4Options())->setMode(Sm4::MODE_GCM);
         $iv = $opts->getIv();
-        $this->assertEquals(24, strlen($iv)); // 12 bytes = 24 hex chars
+        $this->assertEquals(32, strlen($iv)); // 16 bytes = SM4R || 96 random bits
+        $this->assertSame('534d3452', substr($iv, 0, 8));
     }
 
     public function testSm4OptionsNonGcmAutoIvIs32HexChars(): void
     {
-        $opts = new Sm4Options(); // 默认 CBC
+        $opts = (new Sm4Options())->setMode(Sm4::MODE_CBC);
         $iv = $opts->getIv();
         $this->assertEquals(32, strlen($iv)); // 16 bytes = 32 hex chars
     }

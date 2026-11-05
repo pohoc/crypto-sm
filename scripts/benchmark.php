@@ -190,6 +190,7 @@ function printBaselineCheck(array $measured, array $baseline): void
     $requiresLabel = [
         'native_sm3' => '原生 SM3',
         'native_sm4' => 'OpenSSL SM4-ECB',
+        'native_sm4_or_gcm' => 'OpenSSL SM4-GCM 或 SM4-ECB',
         'gmp' => 'GMP 扩展',
     ];
 
@@ -199,7 +200,12 @@ function printBaselineCheck(array $measured, array $baseline): void
     echo str_repeat('-', 72) . "\n";
 
     foreach ($baseline as $label => $config) {
-        if (isset($config['requires']) && !($caps[$config['requires']] ?? false)) {
+        $requiredBackendAvailable = match ($config['requires'] ?? null) {
+            'native_sm4_or_gcm' => $caps['native_sm4'] || $caps['native_gcm'],
+            null => true,
+            default => $caps[$config['requires']] ?? false,
+        };
+        if (!$requiredBackendAvailable) {
             // 阈值按加速后端设定；回退环境比较无意义，标记 SKIP 而非 WARN
             $missing = $requiresLabel[$config['requires']] ?? $config['requires'];
             printf("  %-28s  %-12s  %-12s  %-8s\n", $label, '-', formatTime($config['max_avg_seconds']), 'SKIP');
@@ -245,16 +251,13 @@ function printSystemInfo(): void
     echo '  SM3 哈希后端:     ' . ($caps['native_sm3'] ? '原生 hash() 加速' : '纯 PHP 回退 (hash_algos 无 sm3)') . "\n";
     echo '  SM4 密码后端:     ' . ($caps['native_sm4'] ? 'OpenSSL SM4-ECB 加速' : '纯 PHP 回退 (OpenSSL 无 SM4-ECB)') . "\n";
 
-    // 仅作环境信息展示：当前库的 GCM 路径仍使用 Gcm 后端。
-    $gcmKey = hex2bin('0123456789abcdeffedcba9876543210');
-    $gcmIv = random_bytes(12);
-    $gcmTag = '';
-    $gcmResult = @openssl_encrypt('probe', 'SM4-GCM', $gcmKey, OPENSSL_RAW_DATA, $gcmIv, $gcmTag, '', 16);
-    $gcmAvailable = ($gcmResult !== false);
-    echo '  OpenSSL SM4-GCM:  ' . ($gcmAvailable ? '✓ (可用，当前未作为后端)' : '✗') . "\n";
+    $caps['native_gcm'] = nativeGcmAvailable();
+    echo '  SM4-GCM 后端:     ' . ($caps['native_gcm']
+        ? 'OpenSSL 原生 AEAD'
+        : ($caps['native_sm4'] ? '本库 GHASH + OpenSSL SM4-ECB' : '本库 GHASH + 纯 PHP SM4')) . "\n";
 
     if (!$caps['native_sm3'] || !$caps['native_sm4']) {
-        echo "  ⚠ 当前环境缺少原生国密加速，对称算法走纯 PHP 回退，\n";
+        echo "  ⚠ 当前环境缺少部分原生国密加速，对称算法会使用 PHP 回退，\n";
         echo "    相关基线阈值将标记为 SKIP 而非 WARN（见文末性能基线检查）。\n";
     }
 
@@ -264,7 +267,7 @@ function printSystemInfo(): void
 /**
  * Backend capabilities, mirroring the library's own runtime detection.
  *
- * @return array{native_sm3: bool, native_sm4: bool, gmp: bool}
+ * @return array{native_sm3: bool, native_sm4: bool, native_gcm: bool, gmp: bool}
  */
 function backendCapabilities(): array
 {
@@ -272,8 +275,32 @@ function backendCapabilities(): array
     return $caps ??= [
         'native_sm3' => in_array('sm3', hash_algos(), true),
         'native_sm4' => Sm4PurePhp::openSslSm4Available(),
+        'native_gcm' => nativeGcmAvailable(),
         'gmp' => extension_loaded('gmp'),
     ];
+}
+
+function nativeGcmAvailable(): bool
+{
+    static $available = null;
+    if ($available !== null) {
+        return $available;
+    }
+
+    $key = hex2bin('0123456789abcdeffedcba9876543210');
+    $tag = '';
+    $ciphertext = @openssl_encrypt(
+        'probe',
+        'SM4-GCM',
+        $key,
+        OPENSSL_RAW_DATA,
+        random_bytes(12),
+        $tag,
+        '',
+        16
+    );
+
+    return $available = is_string($ciphertext);
 }
 
 // ============================================================================
@@ -484,13 +511,11 @@ foreach ($sm4CtrResults as $r) {
 // GCM 模式
 echo "\n  GCM 模式:\n";
 $sm4GcmIv = bin2hex(random_bytes(12)); // 12 字节 IV
-$gcmAvailable = false;
-$gcmKey = hex2bin($sm4Key);
-$gcmIv = hex2bin($sm4GcmIv);
-$gcmTag = '';
-$gcmProbeResult = @openssl_encrypt('probe', 'SM4-GCM', $gcmKey, OPENSSL_RAW_DATA, $gcmIv, $gcmTag, '', 16);
-$gcmAvailable = ($gcmProbeResult !== false);
-echo '  SM4-GCM 后端: Gcm (OpenSSL SM4-ECB + 本库 GHASH)' . ($gcmAvailable ? '；OpenSSL SM4-GCM 可用但当前未作为后端' : '') . "\n\n";
+$gcmAvailable = nativeGcmAvailable();
+$gcmBackend = $gcmAvailable
+    ? 'OpenSSL 原生 SM4-GCM'
+    : (Sm4PurePhp::openSslSm4Available() ? '本库 GHASH + OpenSSL SM4-ECB' : '本库 GHASH + 纯 PHP SM4');
+echo '  SM4-GCM 后端: ' . $gcmBackend . "\n\n";
 
 $sm4GcmEncResults = [];
 $sm4GcmDecResults = [];

@@ -13,6 +13,7 @@ use CryptoSm\SM2\SignatureOptions;
 use CryptoSm\SM2\Sm2 as SM2Crypto;
 use CryptoSm\SM2\Sm2CipherOptions;
 use CryptoSm\SM3\HmacSm3;
+use CryptoSm\SM3\Pbkdf2Sm3;
 use CryptoSm\SM3\Sm3;
 use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
@@ -321,6 +322,12 @@ class SmCrypto
         return HmacSm3::hmac($key, $data);
     }
 
+    /** Verify an HMAC-SM3 value using a constant-time comparison. */
+    public static function verifyHmacSm3(string $key, string $data, string $mac): bool
+    {
+        return HmacSm3::verify($key, $data, $mac);
+    }
+
     /**
      * Create a streaming HMAC-SM3 instance.
      *
@@ -330,6 +337,20 @@ class SmCrypto
     public static function hmacSm3Stream(string $key): HmacSm3
     {
         return HmacSm3::create($key);
+    }
+
+    /**
+     * Derive key material with PBKDF2-HMAC-SM3.
+     *
+     * @param  string $password   Password bytes
+     * @param  string $salt       Salt bytes
+     * @param  int    $iterations Positive PRF iteration count
+     * @param  int    $keyLength  Derived key length in bytes
+     * @return string Lowercase hexadecimal derived key
+     */
+    public static function pbkdf2Sm3(string $password, string $salt, int $iterations, int $keyLength): string
+    {
+        return Pbkdf2Sm3::deriveHex($password, $salt, $iterations, $keyLength);
     }
 
     // ─── SM4 Encryption ───────────────────────────────────────────────────
@@ -379,9 +400,9 @@ class SmCrypto
      *
      * @param array<string, mixed> $payload
      */
-    public static function sm4DecryptPayload(array $payload, string $key): string
+    public static function sm4DecryptPayload(array $payload, string $key, string $expectedMode = Sm4::MODE_GCM, int $expectedTagLength = 16, string $expectedAad = '', string $expectedPadding = 'pkcs5'): string
     {
-        return Sm4::decryptPayload($payload, $key);
+        return Sm4::decryptPayload($payload, $key, $expectedMode, $expectedTagLength, $expectedAad, $expectedPadding);
     }
 
 }

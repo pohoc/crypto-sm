@@ -6,6 +6,7 @@ namespace CryptoSm\Tests;
 
 use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
+use CryptoSm\SM4\Sm4PurePhp;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -14,6 +15,8 @@ use PHPUnit\Framework\TestCase;
  * 测试向量来源:
  * - GM/T 0002-2012 SM4 分组密码算法 标准附录
  */
+/** @runTestsInSeparateProcesses */
+#[\PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses]
 class Sm4VectorsTest extends TestCase
 {
     // ========================================================================
@@ -66,6 +69,23 @@ class Sm4VectorsTest extends TestCase
     {
         $plain = Sm4::decrypt(self::STD_CIPHERTEXT_1, self::STD_KEY, (new Sm4Options())->setMode('ecb')->setPadding('none'));
         $this->assertEquals(hex2bin(self::STD_PLAINTEXT_HEX), $plain);
+    }
+
+    /** The pure-PHP fallback must independently match the GM/T block vector. */
+    public function testPurePhpBlockCipherMatchesStandardVector(): void
+    {
+        $key = hex2bin(self::STD_KEY);
+        $plaintext = hex2bin(self::STD_PLAINTEXT_HEX);
+        $ciphertext = hex2bin(self::STD_CIPHERTEXT_1);
+        $this->assertIsString($key);
+        $this->assertIsString($plaintext);
+        $this->assertIsString($ciphertext);
+
+        $engine = new Sm4PurePhp();
+        $engine->setKeyForMode($key, Sm4::MODE_ECB);
+
+        $this->assertSame($ciphertext, $engine->encryptBlock($plaintext));
+        $this->assertSame($plaintext, $engine->decryptBlock($ciphertext));
     }
 
     /**
@@ -196,25 +216,27 @@ class Sm4VectorsTest extends TestCase
     // ========================================================================
 
     /**
-     * ECB + CBC 对相同数据各自正确加解密
+     * ECB + CBC 对相同数据使用独立密钥各自正确加解密
      */
     public function testEcbAndCbcBothCorrect(): void
     {
         $iv = '000102030405060708090a0b0c0d0e0f';
         $msg = str_repeat('A', 32); // 2 blocks
+        $ecbKey = self::STD_KEY;
+        $cbcKey = substr(hash('sha256', self::STD_KEY . 'cbc'), 0, 32);
 
         $ecbOpts = (new Sm4Options())->setMode('ecb');
         $cbcOpts = (new Sm4Options())->setMode('cbc')->setIv($iv);
 
-        $ecbCipher = Sm4::encrypt($msg, self::STD_KEY, $ecbOpts);
-        $cbcCipher = Sm4::encrypt($msg, self::STD_KEY, $cbcOpts);
+        $ecbCipher = Sm4::encrypt($msg, $ecbKey, $ecbOpts);
+        $cbcCipher = Sm4::encrypt($msg, $cbcKey, $cbcOpts);
 
         // ECB 和 CBC 密文应不同（CBC 有 IV XOR）
         $this->assertNotEquals($ecbCipher, $cbcCipher);
 
         // 各自解密正确
-        $this->assertEquals($msg, Sm4::decrypt($ecbCipher, self::STD_KEY, $ecbOpts));
-        $this->assertEquals($msg, Sm4::decrypt($cbcCipher, self::STD_KEY, $cbcOpts));
+        $this->assertEquals($msg, Sm4::decrypt($ecbCipher, $ecbKey, $ecbOpts));
+        $this->assertEquals($msg, Sm4::decrypt($cbcCipher, $cbcKey, $cbcOpts));
     }
 
     /**

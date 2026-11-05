@@ -134,6 +134,20 @@ class NewFeatureTest extends TestCase
         $this->assertNotEquals($hmac1, $hmac2);
     }
 
+    public function testHmacSm3VerifyAcceptsMatchingMacAndRejectsMalformedOrWrongValues(): void
+    {
+        $key = 'verify-key';
+        $data = 'authenticated message';
+        $mac = HmacSm3::hmac($key, $data);
+
+        $this->assertTrue(HmacSm3::verify($key, $data, $mac));
+        $this->assertTrue(HmacSm3::verify($key, $data, strtoupper($mac)));
+        $this->assertTrue(SmCrypto::verifyHmacSm3($key, $data, $mac));
+        $this->assertFalse(HmacSm3::verify($key, $data . '!', $mac));
+        $this->assertFalse(HmacSm3::verify($key, $data, substr($mac, 1)));
+        $this->assertFalse(HmacSm3::verify($key, $data, str_repeat('z', 64)));
+    }
+
     public function testHmacSm3LongKey(): void
     {
         // Key longer than block size (64 bytes) should be hashed first
@@ -168,6 +182,52 @@ class NewFeatureTest extends TestCase
             $hmac->update(substr($data, $i, 50));
         }
         $this->assertEquals($expected, $hmac->finalize());
+    }
+
+    public function testClonedHmacStreamsAreIndependent(): void
+    {
+        $original = HmacSm3::create('secret');
+        $original->update('prefix');
+        $copy = clone $original;
+        $copy->update('B');
+        $original->update('A');
+        $this->assertSame(HmacSm3::hmac('secret', 'prefixA'), $original->finalize());
+        $this->assertSame(HmacSm3::hmac('secret', 'prefixB'), $copy->finalize());
+    }
+
+    public function testHmacContextDebugOutputRedactsKeyPads(): void
+    {
+        $hmac = HmacSm3::create('secret');
+        $debug = $hmac->__debugInfo();
+        $this->assertSame(['key' => '***REDACTED***', 'state' => '***REDACTED***'], $debug);
+        ob_start();
+        var_dump($hmac);
+        $output = ob_get_clean();
+        $this->assertIsString($output);
+        $this->assertStringNotContainsString('iKeyPad', $output);
+        $this->assertStringNotContainsString('oKeyPad', $output);
+    }
+
+    public function testHmacContextCannotBeSerialized(): void
+    {
+        $this->expectException(\LogicException::class);
+        serialize(HmacSm3::create('secret'));
+    }
+
+    public function testHmacContextVarExportDoesNotExposeKeyState(): void
+    {
+        $key = 'known-secret';
+        $hmac = HmacSm3::create($key);
+        $hmac->update('message');
+        $copy = clone $hmac;
+        $pad = str_pad($key, 64, "\0") ^ str_repeat("\x36", 64);
+        foreach ([$hmac, $copy] as $context) {
+            $export = var_export($context, true);
+            $this->assertStringNotContainsString($key, $export);
+            $this->assertStringNotContainsString($pad, $export);
+            $this->assertStringNotContainsString('innerPad', $export);
+            $this->assertSame(HmacSm3::hmac($key, 'message'), $context->finalize());
+        }
     }
 
     public function testHmacSm3ViaFacade(): void

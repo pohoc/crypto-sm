@@ -10,6 +10,8 @@ use CryptoSm\SM2\Keypair;
 use CryptoSm\SM2\SignatureOptions;
 use CryptoSm\SM2\Sm2;
 use CryptoSm\SM2\Sm2CipherOptions;
+use CryptoSm\SM3\Sm3;
+use CryptoSm\Utils\Hex;
 use PHPUnit\Framework\TestCase;
 
 class Sm2Test extends TestCase
@@ -56,6 +58,83 @@ class Sm2Test extends TestCase
         $this->assertEquals($msg, $pt);
     }
 
+    public function testKdfXorMatchesTheSm2CounterStreamAcrossBlockBoundaries(): void
+    {
+        $seed = str_repeat('0123456789abcdef', 4);
+        $method = new \ReflectionMethod(Sm2::class, 'kdfXor');
+
+        foreach ([1, 31, 32, 33, 65] as $length) {
+            $data = random_bytes($length);
+            $stream = '';
+            for ($counter = 1; strlen($stream) < $length; $counter++) {
+                $stream .= Hex::fromHex(Sm3::sm3(Hex::fromHex($seed . sprintf('%08x', $counter))));
+            }
+            $stream = substr($stream, 0, $length);
+            $actual = $method->invoke(null, $seed, $data);
+            $hexActual = $method->invoke(null, $seed, $data, true);
+            if (
+                !is_array($actual)
+                || !isset($actual['data'], $actual['allZero'])
+                || !is_string($actual['data'])
+                || !is_bool($actual['allZero'])
+                || !is_array($hexActual)
+                || !isset($hexActual['data'], $hexActual['allZero'])
+                || !is_string($hexActual['data'])
+                || !is_bool($hexActual['allZero'])
+            ) {
+                throw new \LogicException('SM2 KDF XOR must return data and allZero fields');
+            }
+
+            $this->assertSame($data ^ $stream, $actual['data']);
+            $this->assertSame(hash_equals($stream, str_repeat("\0", $length)), $actual['allZero']);
+            $this->assertSame(bin2hex($data ^ $stream), $hexActual['data']);
+            $this->assertSame($actual['allZero'], $hexActual['allZero']);
+        }
+    }
+
+    public function testKdfLengthIsRejectedBeyondThe32BitCounterLimit(): void
+    {
+        if (PHP_INT_SIZE < 8) {
+            $this->markTestSkipped('The 32-bit KDF boundary exceeds the native string-length range');
+        }
+
+        $validateLength = new \ReflectionMethod(Sm2::class, 'validateKdfLength');
+        $maxAllowedBytes = (0xFFFFFFFF * 32) - 1;
+        $validateLength->invoke(null, $maxAllowedBytes);
+
+        $this->expectException(CryptoException::class);
+        $this->expectExceptionMessage('less than (2^32 - 1) SM3 blocks');
+        $validateLength->invoke(null, $maxAllowedBytes + 1);
+    }
+
+    public function testDecryptAcceptsUppercaseHexCiphertext(): void
+    {
+        $keypair = Sm2::generateKeyPairHex();
+        $message = 'uppercase hex ciphertext';
+        $ciphertext = Sm2::doEncrypt($message, $keypair->getPublicKey());
+
+        $this->assertSame($message, Sm2::doDecrypt(strtoupper($ciphertext), $keypair->getPrivateKey()));
+    }
+
+    public function testDecryptAcceptsOptionalUncompressedPointPrefix(): void
+    {
+        $keypair = Sm2::generateKeyPairHex();
+        $message = 'optional SEC1 point prefix';
+        $legacyOptions = (new Sm2CipherOptions())->setIncludePointPrefix(false);
+        $ciphertext = Sm2::doEncrypt($message, $keypair->getPublicKey(), $legacyOptions);
+
+        $this->assertSame($message, Sm2::doDecrypt('04' . $ciphertext, $keypair->getPrivateKey()));
+    }
+
+    public function testDecryptRejectsLargeMalformedPrefixedCiphertext(): void
+    {
+        $privateKey = str_pad('1', 64, '0', STR_PAD_LEFT);
+        $malformed = '04' . str_repeat('0', 1024 * 1024);
+
+        $this->expectException(InvalidKeyException::class);
+        Sm2::doDecrypt($malformed, $privateKey);
+    }
+
     public function testEncryptDecryptMode0(): void
     {
         $kp = Sm2::generateKeyPairHex();
@@ -77,10 +156,8 @@ class Sm2Test extends TestCase
     public function testEncryptEmptyString(): void
     {
         $kp = Sm2::generateKeyPairHex();
-        $msg = '';
-        $ct = Sm2::doEncrypt($msg, $kp->getPublicKey());
-        $pt = Sm2::doDecrypt($ct, $kp->getPrivateKey());
-        $this->assertEquals($msg, $pt);
+        $this->expectException(InvalidKeyException::class);
+        Sm2::doEncrypt('', $kp->getPublicKey());
     }
 
     public function testEncryptChineseText(): void
@@ -148,6 +225,17 @@ class Sm2Test extends TestCase
         $msg = 'hash mode';
         $sig = Sm2::doSignature($msg, $kp->getPrivateKey(), $opts);
         $this->assertTrue(Sm2::doVerifySignature($msg, $sig, $kp->getPublicKey(), $opts));
+    }
+
+    public function testSigningRejectsMismatchedPublicKeyOption(): void
+    {
+        $keypair = Sm2::generateKeyPairHex();
+        $otherKeypair = Sm2::generateKeyPairHex();
+        $options = (new SignatureOptions())->setPublicKey($otherKeypair->getPublicKey());
+
+        $this->expectException(InvalidKeyException::class);
+        $this->expectExceptionMessage('Public key does not match private key');
+        Sm2::doSignature('identity binding', $keypair->getPrivateKey(), $options);
     }
 
     public function testDerSignature(): void
@@ -354,7 +442,7 @@ class Sm2Test extends TestCase
     {
         $opts = new SignatureOptions();
         $this->assertFalse($opts->getDer());
-        $this->assertFalse($opts->getHash());
+        $this->assertTrue($opts->getHash());
         $this->assertEquals('', $opts->getPublicKey());
         $this->assertEquals('1234567812345678', $opts->getUserId());
     }
@@ -452,6 +540,40 @@ class Sm2Test extends TestCase
         $this->assertFalse($result);
     }
 
+    public function testVerifyRejectsMalformedRawSignature(): void
+    {
+        $kp = Sm2::generateKeyPairHex();
+        foreach (['', 'zz', str_repeat('a', 126), str_repeat('a', 130), str_repeat('g', 128)] as $signature) {
+            $this->assertFalse(Sm2::doVerifySignature('message', $signature, $kp->getPublicKey()));
+        }
+    }
+
+    public function testDefaultSignatureHashesMessageAndRejectsLeadingNulEquivalent(): void
+    {
+        $kp = Sm2::generateKeyPairHex();
+        $options = new SignatureOptions();
+        $signature = Sm2::doSignature('PAY:100', $kp->getPrivateKey(), $options);
+
+        $this->assertTrue(Sm2::doVerifySignature('PAY:100', $signature, $kp->getPublicKey(), $options));
+        $this->assertFalse(Sm2::doVerifySignature("\0PAY:100", $signature, $kp->getPublicKey(), $options));
+        $this->assertFalse(Sm2::doVerifySignature('PAY:100', $signature, $kp->getPublicKey(), (new SignatureOptions())->setHash(false)));
+    }
+
+    public function testPrecomputedSignatureDigestMustBeExactly32Bytes(): void
+    {
+        $kp = Sm2::generateKeyPairHex();
+        $options = (new SignatureOptions())->setHash(false);
+
+        try {
+            Sm2::doSignature('short digest', $kp->getPrivateKey(), $options);
+            $this->fail('Signing must reject a non-32-byte precomputed digest');
+        } catch (CryptoException $e) {
+            $this->assertStringContainsString('exactly 32 bytes', $e->getMessage());
+        }
+
+        $this->assertFalse(Sm2::doVerifySignature('short digest', str_repeat('a', 128), $kp->getPublicKey(), $options));
+    }
+
     public function testVerifyWithDerSignatureAutoDetection(): void
     {
         $kp = Sm2::generateKeyPairHex();
@@ -469,9 +591,8 @@ class Sm2Test extends TestCase
     public function testCiphertextMinimumLength192(): void
     {
         $kp = Sm2::generateKeyPairHex();
-        $ct = Sm2::doEncrypt('', $kp->getPublicKey());
-        // 空明文: C1(128) + C3(64) + C2(0) = 192 hex chars (mode 1)
-        $this->assertEquals(192, strlen($ct));
+        $this->expectException(InvalidKeyException::class);
+        Sm2::doDecrypt(str_repeat('a', 192), $kp->getPrivateKey());
     }
 
     public function testSm2DecryptInvalidC1Rejected(): void
@@ -545,14 +666,17 @@ class Sm2Test extends TestCase
         $this->assertNotEmpty($sig);
     }
 
-    public function testPrivateKeyNMinus1Accepted(): void
+    public function testPrivateKeyNMinus1RejectedAndNMinus2Accepted(): void
     {
-        // n - 1 是合法私钥范围，但 d+1 = n 导致 gmp_invert(d+1, n) = gmp_invert(n, n) = false
-        // 这是一个实现边界：签名算法内部使用 dPlus1Inv = gmp_invert(d+1, n)
-        // 当 d = n-1 时，d+1 = n，invert(n, n) 不存在 → TypeError
-        // 所以 n-1 虽然在数学上是合法私钥，但当前实现不支持
-        // 改用 n-2 测试合法私钥范围
         $n = 'FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123';
+        $nMinus1 = str_pad(strtolower(gmp_strval(gmp_sub(gmp_init($n, 16), 1), 16)), 64, '0', STR_PAD_LEFT);
+        try {
+            Sm2::validatePrivateKey($nMinus1);
+            $this->fail('GM/T private keys must be at most n-2');
+        } catch (InvalidKeyException $exception) {
+            $this->assertStringContainsString('range [1, n-2]', $exception->getMessage());
+        }
+
         $nMinus2 = gmp_strval(gmp_sub(gmp_init($n, 16), 2), 16);
         $paddedKey = str_pad(strtolower($nMinus2), 64, '0', STR_PAD_LEFT);
         $sig = Sm2::doSignature('test', $paddedKey);

@@ -9,10 +9,13 @@ use CryptoSm\Exception\InvalidKeyException;
 use CryptoSm\SM2\Keypair;
 use CryptoSm\SM2\SignatureOptions;
 use CryptoSm\SM2\Sm2CipherOptions;
+use CryptoSm\SM4\Sm4;
 use CryptoSm\SM4\Sm4Options;
 use CryptoSm\SmCrypto;
 use PHPUnit\Framework\TestCase;
 
+/** @runTestsInSeparateProcesses */
+#[\PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses]
 class SmCryptoTest extends TestCase
 {
     // ========================================================================
@@ -283,7 +286,7 @@ class SmCryptoTest extends TestCase
         $msg = 'payload via facade';
         $payload = SmCrypto::sm4EncryptPayload($msg, $key, (new Sm4Options())->setMode('gcm')->setAad('facade aad'));
 
-        $this->assertEquals($msg, SmCrypto::sm4DecryptPayload($payload, $key));
+        $this->assertEquals($msg, SmCrypto::sm4DecryptPayload($payload, $key, Sm4::MODE_GCM, 16, 'facade aad'));
     }
 
     // ========================================================================

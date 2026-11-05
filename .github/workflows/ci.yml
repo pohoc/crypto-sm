@@ -13,4 +13,3 @@ permissions:
 jobs:
   full-ci:
     uses: ./.github/workflows/_ci.yml
-    secrets: inherit

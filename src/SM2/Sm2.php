@@ -14,10 +14,10 @@ use CryptoSm\Utils\Hex;
 
 class Sm2 implements SignerInterface, CipherInterface
 {
-    /** @var int C1C3C2 cipher mode (recommended per GM/T 0003-2012) */
+    /** @var int C1C3C2 cipher mode (GB/T 32918.4-2016 output order) */
     public const CIPHER_MODE_1 = 1;
 
-    /** @var int C1C2C3 cipher mode (legacy, for backward compatibility) */
+    /** @var int C1C2C3 cipher mode (GM/T 0003.4-2012 interoperability) */
     public const CIPHER_MODE_0 = 0;
 
     /** @var array<string, string> SM2 curve parameters as hex strings */
@@ -38,51 +38,6 @@ class Sm2 implements SignerInterface, CipherInterface
 
     /** @var array<string, array<int, array{x: \GMP, y: \GMP}>>|null Cached variable-base multiplication tables, keyed by point hex */
     private static ?array $windowTableCache = null;
-
-    /** @var array<string, string>|null Saved original curve params during temporary override */
-    private static ?array $savedEccTable = null;
-
-    /**
-     * Temporarily override curve parameters (for multi-curve testing).
-     *
-     * Clears all cached derived values. Call resetCurveParams() to restore.
-     * NOT intended for production use — production code should use the
-     * standard SM2 curve parameters hardcoded in this class.
-     *
-     * @param array<string, string> $params Keys: p, a, b, n, gX, gY (64-char hex)
-     */
-    public static function useCurveParams(array $params): void
-    {
-        foreach (['p', 'a', 'b', 'n', 'gX', 'gY'] as $key) {
-            if (!isset($params[$key]) || !preg_match('/^[0-9a-fA-F]{64}$/', $params[$key])) {
-                throw new \InvalidArgumentException("Missing or invalid curve parameter: {$key}");
-            }
-        }
-        if (self::$savedEccTable === null) {
-            self::$savedEccTable = self::$eccTable;
-        }
-        self::$eccTable = array_map('strtolower', $params);
-        self::clearCaches();
-    }
-
-    /**
-     * Restore the standard SM2 curve parameters after useCurveParams().
-     */
-    public static function resetCurveParams(): void
-    {
-        if (self::$savedEccTable !== null) {
-            self::$eccTable = self::$savedEccTable;
-            self::$savedEccTable = null;
-        }
-        self::clearCaches();
-    }
-
-    private static function clearCaches(): void
-    {
-        self::$gmpCache = null;
-        self::$basePointTable = null;
-        self::$windowTableCache = null;
-    }
 
     private static function gmpParam(string $key): \GMP
     {
@@ -150,14 +105,42 @@ class Sm2 implements SignerInterface, CipherInterface
      */
     public static function validatePrivateKey(string $privateKey): void
     {
-        if (!preg_match('/^[0-9a-fA-F]{64}$/', $privateKey)) {
-            throw new InvalidKeyException('Private key must be 256 bits (64 hex chars)');
-        }
+        self::validateScalarEncoding($privateKey, 'Private key');
         $n = self::gmpParam('n');
         $d = gmp_init($privateKey, 16);
-        if (gmp_cmp($d, 1) < 0 || gmp_cmp($d, $n) >= 0) {
-            throw new InvalidKeyException('Private key must be in range [1, n-1]');
+        if (gmp_cmp($d, 1) < 0 || gmp_cmp($d, gmp_sub($n, 1)) >= 0) {
+            throw new InvalidKeyException('Private key must be in range [1, n-2]');
         }
+    }
+
+    /** Validate an SM2 key-exchange ephemeral scalar in [1, n-1]. */
+    public static function validateEphemeralScalar(string $scalar): void
+    {
+        self::validateScalarEncoding($scalar, 'Ephemeral scalar');
+        if (gmp_cmp(gmp_init($scalar, 16), 1) < 0 || gmp_cmp(gmp_init($scalar, 16), self::gmpParam('n')) >= 0) {
+            throw new InvalidKeyException('Ephemeral scalar must be in range [1, n-1]');
+        }
+    }
+
+    private static function validateScalarEncoding(string $scalar, string $label): void
+    {
+        if (!preg_match('/\A[0-9a-fA-F]{64}\z/', $scalar)) {
+            throw new InvalidKeyException($label . ' must be 256 bits (64 hex chars)');
+        }
+    }
+
+    /** @internal Derive a public key from an SM2 key-exchange ephemeral scalar. */
+    public static function getEphemeralPublicKey(string $scalar): string
+    {
+        self::validateEphemeralScalar($scalar);
+        return self::pointMultiply($scalar);
+    }
+
+    /** @internal Generate an ephemeral keypair with scalar range [1, n-1]. */
+    public static function generateEphemeralKeyPairHex(): Keypair
+    {
+        $scalar = str_pad(gmp_strval(self::randomScalar(), 16), 64, '0', STR_PAD_LEFT);
+        return new Keypair($scalar, self::pointMultiply($scalar));
     }
 
     /**
@@ -168,7 +151,7 @@ class Sm2 implements SignerInterface, CipherInterface
      */
     public static function isOnCurve(string $publicKey): bool
     {
-        if (!preg_match('/^[0-9a-fA-F]{128}$/', $publicKey)) {
+        if (!preg_match('/\A[0-9a-fA-F]{128}\z/', $publicKey)) {
             return false;
         }
         $p = self::gmpParam('p');
@@ -199,7 +182,7 @@ class Sm2 implements SignerInterface, CipherInterface
      */
     public static function decompressPublicKey(string $xHex, int $prefix): string
     {
-        if (!preg_match('/^[0-9a-fA-F]{64}$/', $xHex)) {
+        if (!preg_match('/\A[0-9a-fA-F]{64}\z/', $xHex)) {
             throw new CryptoException('Invalid x coordinate format for decompression');
         }
         if ($prefix !== 0x02 && $prefix !== 0x03) {
@@ -262,7 +245,9 @@ class Sm2 implements SignerInterface, CipherInterface
     /** @return array{privateKey: string, publicKey: string} */
     private static function generateKeyPairMaterial(): array
     {
-        $d = self::randomScalar();
+        // GM/T 0003.2 key generation uses d ∈ [1, n-2]. The signature
+        // nonce helper still uses [1, n-1], as required by the signing algorithm.
+        $d = self::randomPrivateScalar();
         $privateKey = str_pad(gmp_strval($d, 16), 64, '0', STR_PAD_LEFT);
         $publicKey = self::pointMultiply($privateKey);
         return ['privateKey' => $privateKey, 'publicKey' => $publicKey];
@@ -273,21 +258,29 @@ class Sm2 implements SignerInterface, CipherInterface
      *
      * @throws CryptoException If max retries exceeded (extremely unlikely with 256-bit random)
      */
-    private static function randomScalar(): \GMP
+    private static function randomScalar(?\GMP $exclusiveUpperBound = null): \GMP
     {
         $n = self::gmpParam('n');
+        $upperBound = $exclusiveUpperBound ?? $n;
         $hexLength = strlen(self::$eccTable['n']);
         $byteLength = max(1, intdiv($hexLength + 1, 2));
         $maxRetries = 1000;
 
         for ($retry = 0; $retry < $maxRetries; $retry++) {
             $candidate = gmp_init(bin2hex(random_bytes($byteLength)), 16);
-            if (gmp_cmp($candidate, 1) >= 0 && gmp_cmp($candidate, $n) < 0) {
+            if (gmp_cmp($candidate, 1) >= 0 && gmp_cmp($candidate, $upperBound) < 0) {
                 return $candidate;
             }
         }
 
         throw new CryptoException('SM2 random scalar generation failed: max retries exceeded');
+    }
+
+    /** Generate a private key in [1, n-2] using rejection sampling. */
+    private static function randomPrivateScalar(): \GMP
+    {
+        $nMinusOne = gmp_sub(self::gmpParam('n'), 1);
+        return self::randomScalar($nMinusOne);
     }
 
     /**
@@ -296,7 +289,7 @@ class Sm2 implements SignerInterface, CipherInterface
      * @param  string                $data      Plaintext data to encrypt
      * @param  string                $publicKey 128-char hex string (uncompressed public key)
      * @param  Sm2CipherOptions|null $options   Cipher mode options (default: C1C3C2)
-     * @return string                Hex-encoded ciphertext
+     * @return string                Hex-encoded ciphertext; C1 uses SEC1 uncompressed encoding by default
      * @throws InvalidKeyException   If public key is invalid
      * @throws CryptoException       If encryption fails (e.g., KDF zero-key after max retries)
      */
@@ -310,6 +303,9 @@ class Sm2 implements SignerInterface, CipherInterface
         }
 
         $dataLen = strlen($data);
+        if ($dataLen === 0) {
+            throw new InvalidKeyException('SM2 plaintext must not be empty; GM/T 0003.4 requires a non-empty KDF output');
+        }
 
         // GM/T 0003-2012 5.4.2: k must be in [1, n-1]
         $kGmp = self::randomScalar();
@@ -318,36 +314,34 @@ class Sm2 implements SignerInterface, CipherInterface
         $x1y1 = self::pointMultiply($k);
         $x1 = substr($x1y1, 0, 64);
         $y1 = substr($x1y1, 64);
-        $C1 = $x1y1;
+        $C1 = ($options->getIncludePointPrefix() ? '04' : '') . $x1y1;
 
         $x2y2 = self::pointMultiply($publicKey, $k);
         $x2 = substr($x2y2, 0, 64);
         $y2 = substr($x2y2, 64);
 
-        $t = self::kdf($x2 . $y2, $dataLen);
-        if ($dataLen > 0) {
-            $maxRetries = 100;
-            $retry = 0;
-            while (self::isAllZero($t)) {
-                $retry++;
-                if ($retry >= $maxRetries) {
-                    throw new CryptoException('SM2 encryption failed: KDF derived all-zero key after max retries');
-                }
-                $kGmp = self::randomScalar();
-                $k = str_pad(gmp_strval($kGmp, 16), 64, '0', STR_PAD_LEFT);
-                $x1y1 = self::pointMultiply($k);
-                $x1 = substr($x1y1, 0, 64);
-                $C1 = $x1y1;
-                $x2y2 = self::pointMultiply($publicKey, $k);
-                $x2 = substr($x2y2, 0, 64);
-                $y2 = substr($x2y2, 64);
-                $t = self::kdf($x2 . $y2, $dataLen);
+        $kdfResult = self::kdfXor($x2 . $y2, $data, true);
+        $maxRetries = 100;
+        $retry = 0;
+        while ($kdfResult['allZero']) {
+            $retry++;
+            if ($retry >= $maxRetries) {
+                throw new CryptoException('SM2 encryption failed: KDF derived all-zero key after max retries');
             }
+            $kGmp = self::randomScalar();
+            $k = str_pad(gmp_strval($kGmp, 16), 64, '0', STR_PAD_LEFT);
+            $x1y1 = self::pointMultiply($k);
+            $x1 = substr($x1y1, 0, 64);
+            $C1 = ($options->getIncludePointPrefix() ? '04' : '') . $x1y1;
+            $x2y2 = self::pointMultiply($publicKey, $k);
+            $x2 = substr($x2y2, 0, 64);
+            $y2 = substr($x2y2, 64);
+            $kdfResult = self::kdfXor($x2 . $y2, $data, true);
         }
 
-        $C2 = $data ^ $t;
-        $C2Hex = bin2hex($C2);
-        $C3 = Sm3::sm3(Hex::fromHex($x2) . $data . Hex::fromHex($y2));
+        $C2Hex = $kdfResult['data'];
+        $c3Hasher = (new Sm3())->update(Hex::fromHex($x2))->update($data)->update(Hex::fromHex($y2));
+        $C3 = $c3Hasher->finalize();
 
         return $cipherMode === self::CIPHER_MODE_1 ? $C1 . $C3 . $C2Hex : $C1 . $C2Hex . $C3;
     }
@@ -368,52 +362,130 @@ class Sm2 implements SignerInterface, CipherInterface
 
         $options ??= new Sm2CipherOptions();
         $cipherMode = $options->getCipherMode();
-
-        if (strlen($data) > 2 && substr($data, 0, 2) === '04' && (strlen($data) - 2) >= 192 && (strlen($data) - 2) % 2 === 0) {
-            $stripped = substr($data, 2);
-            $testC1 = substr($stripped, 0, 128);
-            if (self::isOnCurve($testC1)) {
-                $data = $stripped;
-            }
-        }
-
         if (strlen($data) < 192 || strlen($data) % 2 !== 0) {
             throw new InvalidKeyException('Invalid ciphertext: length must be >= 192 hex chars and even');
         }
+        // Validate the complete encoding before candidate parsing or any copies
+        // proportional to attacker-controlled ciphertext size.
+        if (!ctype_xdigit($data)) {
+            throw new InvalidKeyException('Invalid ciphertext: expected hexadecimal encoding');
+        }
 
-        $C1 = substr($data, 0, 128);
+        // Raw C1 is x||y; some callers also provide SEC1's leading 04 byte.
+        // Those encodings are ambiguous when raw x happens to begin with 04 and
+        // the shifted bytes also form a curve point. Keep both viable candidates
+        // and let C3 authentication identify the actual representation.
+        /** @var list<bool> $candidates True means the SEC1 0x04 prefix is present. */
+        $candidates = [];
+        if (self::isOnCurve(substr($data, 0, 128))) {
+            $candidates[] = false;
+        }
+        if (str_starts_with($data, '04') && strlen($data) >= 194
+            && self::isOnCurve(substr($data, 2, 128))) {
+            $candidates[] = true;
+        }
+        if ($candidates === []) {
+            throw new InvalidKeyException('Invalid C1');
+        }
+
+        $plaintext = null;
+        $verifiedCandidates = 0;
+        foreach ($candidates as $hasPointPrefix) {
+            // C1 and C3 each occupy 64 bytes. Bound KDF work before extracting
+            // or decoding the potentially large C2 portion. Keep an offset
+            // instead of substr($data, 2), which would copy the whole input.
+            $overheadHexLength = $hasPointPrefix ? 194 : 192;
+            self::validateKdfLength(intdiv(strlen($data) - $overheadHexLength, 2));
+            $candidatePlaintext = self::decryptCandidate($data, $privateKey, $cipherMode, $hasPointPrefix);
+            if ($candidatePlaintext !== null) {
+                $plaintext = $candidatePlaintext;
+                $verifiedCandidates++;
+            }
+        }
+
+        if ($verifiedCandidates !== 1 || $plaintext === null) {
+            throw new CryptoException('SM2 decryption failed: ciphertext verification failed');
+        }
+
+        return $plaintext;
+    }
+
+    private static function decryptCandidate(string $data, string $privateKey, int $cipherMode, bool $hasPointPrefix): ?string
+    {
+        $c1Offset = $hasPointPrefix ? 2 : 0;
+        $C1 = substr($data, $c1Offset, 128);
         if ($cipherMode === self::CIPHER_MODE_1) {
-            $C3 = substr($data, 128, 64);
-            $C2 = substr($data, 192);
+            $C3 = substr($data, $c1Offset + 128, 64);
+            $c2Offset = $c1Offset + 192;
+            $c2Length = strlen($data) - $c2Offset;
         } else {
-            $C2 = substr($data, 128, -64);
+            $c2Offset = $c1Offset + 128;
+            $c2Length = strlen($data) - $c2Offset - 64;
             $C3 = substr($data, -64);
+        }
+        if ($c2Length <= 0 || $c2Length % 2 !== 0) {
+            return null;
         }
 
         $C1Point = self::parsePoint($C1);
         if ($C1Point === null || !self::isOnCurve($C1)) {
-            throw new InvalidKeyException('Invalid C1');
+            return null;
         }
 
         $x2y2 = self::pointMultiply($C1, $privateKey);
         $x2 = substr($x2y2, 0, 64);
         $y2 = substr($x2y2, 64);
+        $plaintext = self::kdfXorHexRange($x2 . $y2, $data, $c2Offset, $c2Length);
 
-        $dataLen = (int) (strlen($C2) / 2);
-        $t = self::kdf($x2 . $y2, $dataLen);
-        if ($dataLen > 0 && self::isAllZero($t)) {
-            throw new CryptoException('KDF derived all-zero key');
+        $c3Hasher = (new Sm3())->update(Hex::fromHex($x2))->update($plaintext['data'])->update(Hex::fromHex($y2));
+        $expectedC3 = $c3Hasher->finalize();
+        // Hexadecimal ciphertext is case-insensitive; compare a canonical form
+        // so equivalent uppercase encodings do not fail the integrity check.
+        // Always compare the fixed-length authentication value before checking
+        // the exceptional all-zero KDF condition. Short-circuiting here would
+        // make those two authentication failures observably different.
+        $c3Matches = hash_equals(strtolower($C3), $expectedC3);
+        if (!$c3Matches || $plaintext['allZero']) {
+            return null;
         }
 
-        $C2Bin = Hex::fromHex($C2);
-        $M = $C2Bin ^ $t;
+        return $plaintext['data'];
+    }
 
-        $u = Sm3::sm3(Hex::fromHex($x2) . $M . Hex::fromHex($y2));
-        if (!hash_equals($C3, $u)) {
-            throw new CryptoException('SM2 decryption failed: ciphertext verification failed');
+    /**
+     * Decode and XOR a hex-encoded C2 range in SM3-sized chunks. This avoids
+     * materializing both a full C2 hex substring and its decoded binary copy.
+     *
+     * @return array{data: string, allZero: bool}
+     */
+    private static function kdfXorHexRange(string $seed, string $hexData, int $offset, int $hexLength): array
+    {
+        if ($hexLength < 0 || $hexLength % 2 !== 0 || $offset < 0 || $offset > strlen($hexData) - $hexLength) {
+            throw new CryptoException('Invalid SM2 ciphertext C2 range');
         }
-
-        return $M;
+        $length = intdiv($hexLength, 2);
+        self::validateKdfLength($length);
+        $result = str_repeat("\0", $length);
+        $allZero = true;
+        for ($byteOffset = 0, $ct = 1; $byteOffset < $length; $ct++) {
+            if ($ct > 0xFFFFFFFF) {
+                throw new CryptoException('KDF counter overflow: key length too large');
+            }
+            $chunkLength = min(32, $length - $byteOffset);
+            $ciphertextChunk = hex2bin(substr($hexData, $offset + $byteOffset * 2, $chunkLength * 2));
+            if ($ciphertextChunk === false) {
+                throw new CryptoException('Invalid SM2 ciphertext C2 encoding');
+            }
+            $hash = Hex::fromHex(Sm3::sm3(Hex::fromHex($seed . sprintf('%08x', $ct))));
+            $hashChunk = substr($hash, 0, $chunkLength);
+            $plainChunk = $ciphertextChunk ^ $hashChunk;
+            for ($i = 0; $i < $chunkLength; $i++) {
+                $result[$byteOffset + $i] = $plainChunk[$i];
+            }
+            $allZero = (bool) ($allZero & hash_equals(str_repeat("\0", $chunkLength), $hashChunk));
+            $byteOffset += $chunkLength;
+        }
+        return ['data' => $result, 'allZero' => $allZero];
     }
 
     /**
@@ -426,6 +498,9 @@ class Sm2 implements SignerInterface, CipherInterface
      */
     public static function encrypt(string $data, string $publicKey, mixed $options = null): string
     {
+        if ($options !== null && !$options instanceof Sm2CipherOptions) {
+            throw new InvalidKeyException('SM2 options must be an instance of Sm2CipherOptions');
+        }
         return self::doEncrypt($data, $publicKey, $options instanceof Sm2CipherOptions ? $options : null);
     }
 
@@ -439,6 +514,9 @@ class Sm2 implements SignerInterface, CipherInterface
      */
     public static function decrypt(string $data, string $privateKey, mixed $options = null): string
     {
+        if ($options !== null && !$options instanceof Sm2CipherOptions) {
+            throw new InvalidKeyException('SM2 options must be an instance of Sm2CipherOptions');
+        }
         return self::doDecrypt($data, $privateKey, $options instanceof Sm2CipherOptions ? $options : null);
     }
 
@@ -452,6 +530,9 @@ class Sm2 implements SignerInterface, CipherInterface
      */
     public static function sign(string $data, string $privateKey, mixed $options = null): string
     {
+        if ($options !== null && !$options instanceof SignatureOptions) {
+            throw new InvalidKeyException('SM2 options must be an instance of SignatureOptions');
+        }
         return self::doSignature($data, $privateKey, $options instanceof SignatureOptions ? $options : null);
     }
 
@@ -466,6 +547,9 @@ class Sm2 implements SignerInterface, CipherInterface
      */
     public static function verify(string $data, string $signature, string $publicKey, mixed $options = null): bool
     {
+        if ($options !== null && !$options instanceof SignatureOptions) {
+            return false;
+        }
         return self::doVerifySignature($data, $signature, $publicKey, $options instanceof SignatureOptions ? $options : null);
     }
 
@@ -488,10 +572,22 @@ class Sm2 implements SignerInterface, CipherInterface
         $publicKey = $options->getPublicKey();
         $userId = $options->getUserId();
 
+        if (strlen($userId) > 8191) {
+            throw new CryptoException('SM2 user ID exceeds the 16-bit ENTL limit (maximum 8191 bytes)');
+        }
+
         self::validatePrivateKey($privateKey);
 
-        if ($hash && $publicKey === '') {
-            $publicKey = self::getPublicKey($privateKey);
+        if ($hash) {
+            $derivedPublicKey = self::getPublicKey($privateKey);
+            if ($publicKey === '') {
+                $publicKey = $derivedPublicKey;
+            } elseif (!hash_equals(strtolower($derivedPublicKey), strtolower($publicKey))) {
+                throw new InvalidKeyException('Public key does not match private key');
+            }
+        }
+        if (!$hash && strlen($data) !== 32) {
+            throw new CryptoException('SM2 precomputed signature digest must be exactly 32 bytes');
         }
         $e = self::calcE($data, $hash, $publicKey, $userId);
 
@@ -559,34 +655,73 @@ class Sm2 implements SignerInterface, CipherInterface
         $hash = $options->getHash();
         $userId = $options->getUserId();
 
+        if (strlen($userId) > 8191) {
+            return false;
+        }
         if (!self::isOnCurve($publicKey)) {
             return false;
         }
-
-        if (!$der && strlen($signature) !== 128 && strlen($signature) > 4 && substr($signature, 0, 2) === '30') {
-            $der = true;
+        if (!$hash && strlen($data) !== 32) {
+            return false;
         }
 
+        /** @var list<array{0: string, 1: string}> $candidates */
+        $candidates = [];
         try {
-            [$x1Hex, $sHex] = $der ? Asn1::decodeDerSignature($signature) : [substr($signature, 0, 64), substr($signature, 64)];
+            if ($der) {
+                $candidates[] = Asn1::decodeDerSignature($signature);
+            } else {
+                // A 64-byte DER signature is also 128 hex characters, the
+                // exact width of r||s. When both encodings are plausible,
+                // verify both interpretations instead of choosing by length.
+                if (strlen($signature) > 4 && str_starts_with($signature, '30')) {
+                    try {
+                        $candidates[] = Asn1::decodeDerSignature($signature);
+                    } catch (CryptoException) {
+                        // It may still be a raw signature beginning with 0x30.
+                    }
+                }
+                if (strlen($signature) === 128 && preg_match('/\A[0-9a-fA-F]{128}\z/', $signature)) {
+                    $candidates[] = [substr($signature, 0, 64), substr($signature, 64, 64)];
+                }
+                if ($candidates === []) {
+                    return false;
+                }
+            }
         } catch (CryptoException) {
             return false;
         }
 
+        $e = self::calcE($data, $hash, $publicKey, $userId);
+        $verified = false;
+        foreach ($candidates as [$x1Hex, $sHex]) {
+            if (self::verifySignatureComponents($x1Hex, $sHex, $e, $publicKey)) {
+                $verified = true;
+            }
+        }
+
+        return $verified;
+    }
+
+    private static function verifySignatureComponents(string $x1Hex, string $sHex, \GMP $e, string $publicKey): bool
+    {
         $n = self::gmpParam('n');
-        $x1Dec = gmp_init($x1Hex, 16);
-        $sDec = gmp_init($sHex, 16);
+        try {
+            $x1Dec = gmp_init($x1Hex, 16);
+            $sDec = gmp_init($sHex, 16);
+        } catch (\ValueError) {
+            return false;
+        }
         if (!self::constantTimeInSignatureRange($x1Dec, $n) || !self::constantTimeInSignatureRange($sDec, $n)) {
             return false;
         }
 
-        $e = self::calcE($data, $hash, $publicKey, $userId);
         $t = gmp_mod(gmp_add($x1Dec, $sDec), $n);
         if (self::constantTimeIsZero($t)) {
             return false;
         }
 
-        // Use internal methods to avoid str↔GMP round-trip
+        // Use internal methods to avoid str↔GMP round-trip.
         $p = self::gmpParam('p');
         $a = self::gmpParam('a');
         $point1 = self::fixedBaseMultiply($sDec, $p, $a);
@@ -627,7 +762,7 @@ class Sm2 implements SignerInterface, CipherInterface
 
     private static function getUserIdHash(string $userId, string $x, string $y): string
     {
-        // GM/T 0003-2012 Annex A: ENTL is a fixed 16-bit field holding the bit
+        // GM/T 0009-2023 Section 8.1: ENTL is a fixed 16-bit field holding the bit
         // length of ENT (the user ID). IDs whose bit length exceeds 0xFFFF have
         // no valid encoding and MUST be rejected instead of being truncated or
         // emitted with an oversized length prefix.
@@ -661,22 +796,57 @@ class Sm2 implements SignerInterface, CipherInterface
         return Sm3::sm3(Hex::fromHex(self::getUserIdHash($userId, $x, $y)));
     }
 
-    private static function kdf(string $seed, int $keyLen): string
+    /**
+     * XOR data with the SM2 KDF stream without allocating a second full-size
+     * KDF buffer. The allZero flag describes the KDF bytes, not the XOR result.
+     *
+     * @return array{data: string, allZero: bool}
+     */
+    private static function kdfXor(string $seed, string $data, bool $hexOutput = false): array
     {
         $ct = 1;
-        $key = '';
+        $length = strlen($data);
+        self::validateKdfLength($length);
+        if ($hexOutput && $length > intdiv(PHP_INT_MAX, 2)) {
+            throw new CryptoException('SM2 KDF output exceeds the supported string length');
+        }
+        $result = str_repeat($hexOutput ? '0' : "\0", $hexOutput ? $length * 2 : $length);
+        $allZero = true;
         $maxCt = 0xFFFFFFFF; // 32-bit counter limit per GM/T 0003-2012
-        while (strlen($key) < $keyLen) {
-            // [不可达守卫] klen 受 MAX_KLEN 约束，计数器远小于 2^32
+        for ($offset = 0; $offset < $length;) {
             if ($ct > $maxCt) {
                 throw new CryptoException('KDF counter overflow: key length too large');
             }
-            // [/不可达守卫]
-            $hash = Sm3::sm3(Hex::fromHex($seed . sprintf('%08x', $ct)));
-            $key .= Hex::fromHex($hash);
+            $hash = Hex::fromHex(Sm3::sm3(Hex::fromHex($seed . sprintf('%08x', $ct))));
+            $chunkLength = min(strlen($hash), $length - $offset);
+            $chunk = substr($data, $offset, $chunkLength) ^ substr($hash, 0, $chunkLength);
+            if ($hexOutput) {
+                $hexChunk = bin2hex($chunk);
+                for ($i = 0, $hexLength = strlen($hexChunk); $i < $hexLength; $i++) {
+                    $result[($offset * 2) + $i] = $hexChunk[$i];
+                }
+            } else {
+                for ($i = 0; $i < $chunkLength; $i++) {
+                    $result[$offset + $i] = $chunk[$i];
+                }
+            }
+            $chunkIsZero = hash_equals(str_repeat("\0", $chunkLength), substr($hash, 0, $chunkLength));
+            $allZero = (bool) ($allZero & $chunkIsZero);
+            $offset += $chunkLength;
             $ct++;
         }
-        return substr($key, 0, $keyLen);
+        return ['data' => $result, 'allZero' => $allZero];
+    }
+
+    /** Enforce GM/T's strict SM2 KDF length bound without allocating output. */
+    private static function validateKdfLength(int $length): void
+    {
+        // GM/T 0003.4 requires klen < (2^32 - 1) * v bits. For SM3 v=256,
+        // byte-oriented input therefore must be strictly shorter than
+        // (2^32 - 1) * 32 bytes. This bound is unreachable on 32-bit PHP.
+        if (PHP_INT_SIZE >= 8 && $length >= 0xFFFFFFFF * 32) {
+            throw new CryptoException('SM2 KDF output length must be less than (2^32 - 1) SM3 blocks');
+        }
     }
 
     private static function pointMultiply(string $point, ?string $factor = null): string
@@ -830,7 +1000,7 @@ class Sm2 implements SignerInterface, CipherInterface
                 $table[$i] = $sum;
             }
 
-            if (count(self::$windowTableCache) > 16) {
+            if (count(self::$windowTableCache) >= 16) {
                 array_shift(self::$windowTableCache);
             }
 
@@ -958,7 +1128,11 @@ class Sm2 implements SignerInterface, CipherInterface
      */
     private static function constantTimeInSignatureRange(\GMP $value, \GMP $n): bool
     {
-        $hex = str_pad(gmp_strval($value, 16), 64, '0', STR_PAD_LEFT);
+        $valueHex = gmp_strval($value, 16);
+        if (strlen($valueHex) > 64) {
+            return false;
+        }
+        $hex = str_pad($valueHex, 64, '0', STR_PAD_LEFT);
         $nHex = str_pad(gmp_strval($n, 16), 64, '0', STR_PAD_LEFT);
 
         $notZero = !hash_equals($hex, str_repeat('0', 64));
@@ -973,11 +1147,6 @@ class Sm2 implements SignerInterface, CipherInterface
 
         $result = (int) $notZero & ($less !== 0 ? 1 : 0);
         return $result !== 0;
-    }
-
-    private static function isAllZero(string $data): bool
-    {
-        return trim($data, "\0") === '';
     }
 
     /**
@@ -1001,8 +1170,18 @@ class Sm2 implements SignerInterface, CipherInterface
      */
     public static function pointMultiplyPublic(string $point, ?string $factor = null): string
     {
-        if (strlen($point) === 128 && !self::isOnCurve($point)) {
-            throw new InvalidKeyException('Invalid point: not on SM2 curve');
+        if (strlen($point) <= 64) {
+            if ($factor !== null) {
+                throw new InvalidKeyException('A scalar factor cannot be provided when multiplying the SM2 base point');
+            }
+            if (!preg_match('/\A[0-9a-fA-F]{1,64}\z/', $point)) {
+                throw new InvalidKeyException('Base point scalar must be 1 to 64 hexadecimal characters');
+            }
+        } elseif (strlen($point) !== 128 || !self::isOnCurve($point)) {
+            throw new InvalidKeyException('Invalid point: expected a valid 128-character SM2 point');
+        }
+        if ($factor !== null && !preg_match('/\A[0-9a-fA-F]{1,64}\z/', $factor)) {
+            throw new InvalidKeyException('Point multiplication factor must be 1 to 64 hexadecimal characters');
         }
         return self::pointMultiply($point, $factor);
     }
@@ -1017,6 +1196,9 @@ class Sm2 implements SignerInterface, CipherInterface
      */
     public static function pointAddPublic(string $point1Hex, string $point2Hex): ?string
     {
+        if (!self::isOnCurve($point1Hex) || !self::isOnCurve($point2Hex)) {
+            return null;
+        }
         $p1 = self::parsePoint($point1Hex);
         $p2 = self::parsePoint($point2Hex);
         if ($p1 === null || $p2 === null) {
@@ -1035,7 +1217,7 @@ class Sm2 implements SignerInterface, CipherInterface
      */
     private static function parsePoint(string $hex): ?array
     {
-        if (!preg_match('/^[0-9a-fA-F]{128}$/', $hex)) {
+        if (!preg_match('/\A[0-9a-fA-F]{128}\z/', $hex)) {
             return null;
         }
         return [

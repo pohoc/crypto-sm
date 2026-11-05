@@ -1,0 +1,84 @@
+name: Post-release verification
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published tag to verify again, for example v0.4.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify-packagist:
+    name: Verify Packagist and fresh Composer installation
+    if: ${{ github.event_name != 'release' || github.event.release.draft == false }}
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve published release tag
+        id: release-tag
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == release ]]; then
+            TAG="$RELEASE_TAG"
+          else
+            TAG="$INPUT_TAG"
+            gh release view "$TAG" --json tagName,isDraft --jq "select(.isDraft == false) | .tagName" > "$RUNNER_TEMP/tag-name"
+            test "$(cat "$RUNNER_TEMP/tag-name")" = "$TAG"
+          fi
+          [[ "$TAG" == v* ]]
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ steps.release-tag.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Resolve published tag commit
+        id: release
+        env:
+          TAG: ${{ steps.release-tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          php scripts/ReleaseVersion.php "${TAG#v}" --allow-existing >/dev/null
+          SHA="$(git rev-parse "$TAG^{commit}")"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for Packagist to resolve the tag to its commit
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          SHA: ${{ steps.release.outputs.sha }}
+        run: php scripts/PackagistReleaseCheck.php "$TAG" "$SHA"
+
+      - uses: shivammathur/setup-php@8358ee0e2e8afe63c2fb8253d1d52085811ab1e5 # v2
+        with:
+          php-version: '8.4'
+          extensions: gmp, openssl
+          tools: composer:v2
+          coverage: none
+
+      - name: Install the published version in a clean Composer project
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          EXPECTED_SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          PROJECT="$RUNNER_TEMP/crypto-sm-packagist-check"
+          mkdir -p "$PROJECT"
+          cd "$PROJECT"
+          VERSION="${TAG#v}"
+          printf '{"name":"crypto-sm/release-check","minimum-stability":"dev","prefer-stable":true,"require":{"pohoc/crypto-sm":"%s"}}\n' "$VERSION" > composer.json
+          composer update --no-interaction --no-progress --prefer-dist
+          php "$GITHUB_WORKSPACE/scripts/PackagistReleaseCheck.php" --lock "$VERSION" "$EXPECTED_SHA"

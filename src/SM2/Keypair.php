@@ -4,22 +4,63 @@ declare(strict_types=1);
 
 namespace CryptoSm\SM2;
 
+use CryptoSm\Exception\InvalidKeyException;
+
 /**
  * Represents an SM2 key pair.
  */
 class Keypair implements \JsonSerializable
 {
-    private string $privateKey;
+    /** @var \WeakMap<object, string>|null */
+    private static ?\WeakMap $privateKeys = null;
+    private object $privateKeyHandle;
     private string $publicKey;
 
+    /** @return \WeakMap<object, string> */
+    private static function privateKeys(): \WeakMap
+    {
+        return self::$privateKeys ??= new \WeakMap();
+    }
+
     /**
-     * @param string $privateKey 64-character hex string
-     * @param string $publicKey  128-character hex string (uncompressed, without "04" prefix)
+     * @param  string              $privateKey 64-character SM2 private or ephemeral scalar
+     * @param  string              $publicKey  128-character uncompressed SM2 public point (without "04" prefix)
+     * @throws InvalidKeyException If the key material is invalid or does not form a pair
      */
     public function __construct(string $privateKey, string $publicKey)
     {
-        $this->privateKey = $privateKey;
+        Sm2::validateEphemeralScalar($privateKey);
+        if (!Sm2::isOnCurve($publicKey)) {
+            throw new InvalidKeyException('Public key must be a valid point on the SM2 curve');
+        }
+
+        $derivedPublicKey = Sm2::getEphemeralPublicKey($privateKey);
+        if (!hash_equals(strtolower($derivedPublicKey), strtolower($publicKey))) {
+            throw new InvalidKeyException('SM2 public key does not correspond to the private key');
+        }
+
+        $this->privateKeyHandle = new \stdClass();
+        self::privateKeys()[$this->privateKeyHandle] = $privateKey;
         $this->publicKey = $publicKey;
+    }
+
+    public function __clone()
+    {
+        $privateKey = $this->getPrivateKey();
+        $this->privateKeyHandle = new \stdClass();
+        self::privateKeys()[$this->privateKeyHandle] = $privateKey;
+    }
+
+    /** @return array<string, mixed> */
+    public function __serialize(): array
+    {
+        throw new \LogicException('SM2 key pairs cannot be serialized');
+    }
+
+    /** @param array<string, mixed> $data */
+    public function __unserialize(array $data): void
+    {
+        throw new \LogicException('SM2 key pairs cannot be unserialized');
     }
 
     /**
@@ -29,7 +70,11 @@ class Keypair implements \JsonSerializable
      */
     public function getPrivateKey(): string
     {
-        return $this->privateKey;
+        $privateKey = self::privateKeys()[$this->privateKeyHandle] ?? null;
+        if ($privateKey === null) {
+            throw new \LogicException('SM2 private key is unavailable');
+        }
+        return $privateKey;
     }
 
     /**

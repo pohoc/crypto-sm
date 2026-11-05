@@ -5,12 +5,15 @@ declare(strict_types=1);
 namespace CryptoSm\SM3;
 
 use CryptoSm\Interfaces\HashInterface;
+use CryptoSm\Utils\SensitiveContext;
 
 /**
  * SM3 cryptographic hash algorithm implementation (GM/T 0004-2012).
  */
 class Sm3 implements HashInterface
 {
+    use SensitiveContext;
+
     private const IV = [
         0x7380166f,
         0x4914b2b9,
@@ -122,8 +125,8 @@ class Sm3 implements HashInterface
 
     private ?\HashContext $hashContext = null;
 
-    /** @var int Total number of bytes processed */
-    private int $totalLen = 0;
+    /** @var string Total number of bytes processed as an unsigned 64-bit big-endian byte count */
+    private string $totalLengthBytes = "\0\0\0\0\0\0\0\0";
 
     /** @var array<int,int> Pure PHP state (8 x 32-bit words) */
     private array $state;
@@ -136,8 +139,18 @@ class Sm3 implements HashInterface
                 && in_array('sm3', hash_algos(), true);
         }
         $this->nativeAvailable = self::$nativeSm3Available;
+        if (!$this->nativeAvailable) {
+            self::assertPurePhpSupported();
+        }
         if ($this->nativeAvailable) {
             $this->hashContext = hash_init('sm3');
+        }
+    }
+
+    public function __clone()
+    {
+        if ($this->hashContext !== null) {
+            $this->hashContext = hash_copy($this->hashContext);
         }
     }
 
@@ -149,18 +162,31 @@ class Sm3 implements HashInterface
      */
     public function update(string $data): self
     {
+        if (!$this->nativeAvailable) {
+            self::assertPurePhpSupported();
+        }
         $dataLen = strlen($data);
-        $this->totalLen += $dataLen;
+        $this->addToTotalLength($dataLen);
 
         if ($this->nativeAvailable && $this->hashContext !== null) {
             hash_update($this->hashContext, $data);
         } else {
-            // Pure PHP path: process blocks incrementally, no allData overhead
-            $this->buffer .= $data;
-            while (strlen($this->buffer) >= 64) {
-                $block = substr($this->buffer, 0, 64);
-                $this->buffer = substr($this->buffer, 64);
-                $this->state = self::processBlock($block, $this->state);
+            $offset = 0;
+            if ($this->buffer !== '') {
+                $take = min(64 - strlen($this->buffer), $dataLen);
+                $this->buffer .= substr($data, 0, $take);
+                $offset = $take;
+                if (strlen($this->buffer) === 64) {
+                    $this->state = self::processBlock($this->buffer, $this->state);
+                    $this->buffer = '';
+                }
+            }
+            while ($offset + 64 <= $dataLen) {
+                $this->state = self::processBlock(substr($data, $offset, 64), $this->state);
+                $offset += 64;
+            }
+            if ($offset < $dataLen) {
+                $this->buffer .= substr($data, $offset);
             }
         }
 
@@ -191,7 +217,7 @@ class Sm3 implements HashInterface
     private function reset(): void
     {
         $this->buffer = '';
-        $this->totalLen = 0;
+        $this->totalLengthBytes = "\0\0\0\0\0\0\0\0";
         $this->state = self::IV;
         $this->hashContext = $this->nativeAvailable ? hash_init('sm3') : null;
     }
@@ -201,16 +227,16 @@ class Sm3 implements HashInterface
      */
     private function finalizePure(): string
     {
+        self::assertPurePhpSupported();
         $msg = $this->buffer;
         $len = strlen($msg);
-        $bitLen = $this->totalLen * 8;
 
         $msg .= chr(0x80);
         $padLen = (56 - (($len + 1) % 64) + 64) % 64;
         if ($padLen) {
             $msg .= str_repeat(chr(0x00), $padLen);
         }
-        $msg .= pack('N2', $bitLen >> 32, $bitLen & 0xFFFFFFFF);
+        $msg .= self::encodeBitLengthHex(bin2hex($this->totalLengthBytes));
 
         $blocks = str_split($msg, 64);
         $v = $this->state;
@@ -219,6 +245,14 @@ class Sm3 implements HashInterface
         }
 
         return sprintf('%08x%08x%08x%08x%08x%08x%08x%08x', ...$v);
+    }
+
+    /** The PHP-integer round arithmetic requires a signed 64-bit runtime. */
+    private static function assertPurePhpSupported(): void
+    {
+        if (PHP_INT_SIZE < 8) {
+            throw new \RuntimeException('Pure PHP SM3 requires a 64-bit PHP runtime; native SM3 support is required on 32-bit platforms');
+        }
     }
 
     /**
@@ -315,6 +349,7 @@ class Sm3 implements HashInterface
      */
     private static function computeHashPure(string $msg): string
     {
+        self::assertPurePhpSupported();
         $blocks = self::pad($msg);
         $v = self::IV;
 
@@ -407,25 +442,77 @@ class Sm3 implements HashInterface
         return [$w, $wPrime];
     }
 
-    /** @return array<int,string> */
-    private static function pad(string $msg): array
+    /** @return \Generator<int, string> */
+    private static function pad(string $msg): \Generator
     {
         $len = strlen($msg);
-        // GM/T 0004-2012: message length in bits, max 2^64 - 1 bits
-        $bitLen = $len * 8;
-        if (PHP_INT_SIZE >= 8) {
-            if ($len > (int) ((PHP_INT_MAX - 7) / 8)) {
-                throw new \RuntimeException('SM3: message too long, bit length overflow');
-            }
+        $fullLength = $len - ($len % 64);
+
+        for ($offset = 0; $offset < $fullLength; $offset += 64) {
+            yield substr($msg, $offset, 64);
         }
 
-        $msg .= chr(0x80);
-        $padLen = (56 - (($len + 1) % 64) + 64) % 64;
+        $tail = substr($msg, $fullLength) . chr(0x80);
+        $padLen = (56 - (strlen($tail) % 64) + 64) % 64;
         if ($padLen) {
-            $msg .= str_repeat(chr(0x00), $padLen);
+            $tail .= str_repeat(chr(0x00), $padLen);
         }
-        $msg .= pack('N2', $bitLen >> 32, $bitLen & 0xFFFFFFFF);
+        $tail .= self::encodeBitLength($len);
 
-        return str_split($msg, 64);
+        for ($offset = 0, $tailLength = strlen($tail); $offset < $tailLength; $offset += 64) {
+            yield substr($tail, $offset, 64);
+        }
+    }
+
+    /** Encode a byte length as the 64-bit big-endian bit length required by GM/T 0004-2012. */
+    private static function encodeBitLength(int $byteLength): string
+    {
+        if ($byteLength < 0) {
+            throw new \RuntimeException('SM3: message length must not be negative');
+        }
+
+        // Shift the fixed-width hexadecimal representation nibble by nibble so
+        // this remains safe on 32-bit PHP, where byteLength * 8 can overflow.
+        return self::encodeBitLengthHex(sprintf('%016x', $byteLength));
+    }
+
+    private static function encodeBitLengthHex(string $hex): string
+    {
+        $bitLengthHex = '';
+        $carry = 0;
+        for ($i = 15; $i >= 0; $i--) {
+            $value = hexdec($hex[$i]) * 8 + $carry;
+            $bitLengthHex = dechex($value & 0x0F) . $bitLengthHex;
+            $carry = $value >> 4;
+        }
+
+        if ($carry !== 0) {
+            throw new \RuntimeException('SM3: message too long, bit length exceeds 64 bits');
+        }
+
+        return pack('H*', $bitLengthHex);
+    }
+
+    private function addToTotalLength(int $byteLength): void
+    {
+        if ($byteLength < 0) {
+            throw new \RuntimeException('SM3: update length must not be negative');
+        }
+
+        $total = $this->totalLengthBytes;
+        $carry = $byteLength;
+        for ($i = 7; $i >= 0; $i--) {
+            $sum = ord($total[$i]) + ($carry % 256);
+            $carry = intdiv($carry, 256) + ($sum >> 8);
+            $total[$i] = chr($sum & 0xFF);
+        }
+
+        // The 64-bit SM3 trailer stores a bit count, so a byte count may use at
+        // most 61 bits. Reject overflow before accepting this update.
+        if ($carry !== 0 || ord($total[0]) > 0x1F) {
+            throw new \RuntimeException('SM3: message too long, bit length exceeds 64 bits');
+        }
+
+        $this->totalLengthBytes = $total;
     }
 }

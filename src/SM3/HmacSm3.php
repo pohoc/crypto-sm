@@ -28,18 +28,22 @@ class HmacSm3
      */
     public static function hmac(string $key, string $data): string
     {
-        if (strlen($key) > self::BLOCK_SIZE) {
-            $key = Hex::fromHex(Sm3::sm3($key));
-            assert(strlen($key) <= self::BLOCK_SIZE, 'SM3 hash output must fit within HMAC block size');
+        return self::create($key)->update($data)->finalize();
+    }
+
+    /**
+     * Verify a lowercase or uppercase hexadecimal HMAC-SM3 value.
+     *
+     * Malformed values are rejected. Valid values are compared with
+     * hash_equals() so callers do not need to implement MAC comparison safely.
+     */
+    public static function verify(string $key, string $data, string $mac): bool
+    {
+        if (!preg_match('/\\A[0-9a-fA-F]{64}\\z/', $mac)) {
+            return false;
         }
 
-        $key = str_pad($key, self::BLOCK_SIZE, "\0");
-
-        $iKeyPad = $key ^ str_repeat(chr(0x36), self::BLOCK_SIZE);
-        $oKeyPad = $key ^ str_repeat(chr(0x5C), self::BLOCK_SIZE);
-
-        $innerHash = Sm3::sm3($iKeyPad . $data);
-        return Sm3::sm3($oKeyPad . Hex::fromHex($innerHash));
+        return hash_equals(self::hmac($key, $data), strtolower($mac));
     }
 
     /**
@@ -53,9 +57,26 @@ class HmacSm3
         return new self($key);
     }
 
-    private string $iKeyPad;
-    private string $oKeyPad;
-    private Sm3 $innerHasher;
+    /** @var \WeakMap<object, array{innerPad: string, outerPad: string, hasher: Sm3}>|null */
+    private static ?\WeakMap $states = null;
+
+    private object $handle;
+
+    /** @return \WeakMap<object, array{innerPad: string, outerPad: string, hasher: Sm3}> */
+    private static function states(): \WeakMap
+    {
+        return self::$states ??= new \WeakMap();
+    }
+
+    /** @return array{innerPad: string, outerPad: string, hasher: Sm3} */
+    private function state(): array
+    {
+        $states = self::states();
+        if (!isset($states[$this->handle])) {
+            throw new \LogicException('HMAC-SM3 context is unavailable');
+        }
+        return $states[$this->handle];
+    }
 
     private function __construct(string $key)
     {
@@ -65,11 +86,12 @@ class HmacSm3
         }
         $key = str_pad($key, self::BLOCK_SIZE, "\0");
 
-        $this->iKeyPad = $key ^ str_repeat(chr(0x36), self::BLOCK_SIZE);
-        $this->oKeyPad = $key ^ str_repeat(chr(0x5C), self::BLOCK_SIZE);
-
-        $this->innerHasher = new Sm3();
-        $this->innerHasher->update($this->iKeyPad);
+        $innerPad = $key ^ str_repeat(chr(0x36), self::BLOCK_SIZE);
+        $outerPad = $key ^ str_repeat(chr(0x5C), self::BLOCK_SIZE);
+        $hasher = new Sm3();
+        $hasher->update($innerPad);
+        $this->handle = new \stdClass();
+        self::states()[$this->handle] = ['innerPad' => $innerPad, 'outerPad' => $outerPad, 'hasher' => $hasher];
     }
 
     /**
@@ -80,8 +102,34 @@ class HmacSm3
      */
     public function update(string $data): self
     {
-        $this->innerHasher->update($data);
+        $this->state()['hasher']->update($data);
         return $this;
+    }
+
+    public function __clone()
+    {
+        $state = $this->state();
+        $state['hasher'] = clone $state['hasher'];
+        $this->handle = new \stdClass();
+        self::states()[$this->handle] = $state;
+    }
+
+    /** @return array<string, string> */
+    public function __debugInfo(): array
+    {
+        return ['key' => '***REDACTED***', 'state' => '***REDACTED***'];
+    }
+
+    /** @return array<string, mixed> */
+    public function __serialize(): array
+    {
+        throw new \LogicException('HMAC-SM3 contexts cannot be serialized');
+    }
+
+    /** @param array<string, mixed> $data */
+    public function __unserialize(array $data): void
+    {
+        throw new \LogicException('HMAC-SM3 contexts cannot be unserialized');
     }
 
     /**
@@ -96,13 +144,15 @@ class HmacSm3
      */
     public function finalize(): string
     {
-        $innerResult = $this->innerHasher->finalize();
+        $state = $this->state();
+        $innerResult = $state['hasher']->finalize();
 
         // Reset inner hasher for potential reuse
-        $this->innerHasher = new Sm3();
-        $this->innerHasher->update($this->iKeyPad);
+        $state['hasher'] = new Sm3();
+        $state['hasher']->update($state['innerPad']);
+        self::states()[$this->handle] = $state;
 
         // Outer hash uses one-shot Sm3::sm3() which also leverages OpenSSL
-        return Sm3::sm3($this->oKeyPad . Hex::fromHex($innerResult));
+        return Sm3::sm3($state['outerPad'] . Hex::fromHex($innerResult));
     }
 }

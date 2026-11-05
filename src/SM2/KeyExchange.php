@@ -15,6 +15,8 @@ use CryptoSm\Utils\Hex;
  * Implements the SM2 key exchange protocol (ECDH-style with SM2-specific derivation).
  * Two parties (initiator A and responder B) exchange temporary public keys
  * and derive a shared secret key.
+ * This GM/T 0003 protocol is not the TLS 1.3 key exchange; RFC 8998 explicitly
+ * prohibits using it in its TLS profile. Use a TLS implementation for TLS.
  *
  * Protocol flow:
  * 1. A generates ephemeral keypair (rA, RA), sends RA to B
@@ -25,17 +27,21 @@ use CryptoSm\Utils\Hex;
  */
 class KeyExchange
 {
-    /** Maximum derived key length in bytes accepted by the key exchange (1 MiB, far above any legitimate use) */
-    public const MAX_KLEN = 1048576;
+    /** Maximum derived key length in bytes; bounds CPU and memory use for the pure-PHP KDF. */
+    public const MAX_KLEN = 4096;
 
     /**
-     * Generate an ephemeral keypair for key exchange.
+     * Generate an ephemeral keypair for one key-exchange session.
      *
-     * @return Keypair Ephemeral keypair (rA or rB)
+     * Never reuse the returned private scalar in another session or with
+     * another peer. The exchange methods also accept caller-supplied scalars
+     * and cannot detect reuse across processes or restarts.
+     *
+     * @return Keypair One-session ephemeral keypair (rA or rB)
      */
     public static function generateEphemeralKeyPair(): Keypair
     {
-        return Sm2::generateKeyPairHex();
+        return Sm2::generateEphemeralKeyPairHex();
     }
 
     /**
@@ -47,7 +53,7 @@ class KeyExchange
      * K  = KDF(xV || yV || ZA || ZB, klen)
      *
      * @param  string              $dA   Initiator's static private key (64-char hex)
-     * @param  string              $rA   Initiator's ephemeral private key (64-char hex)
+     * @param  string              $rA   Fresh, one-session initiator ephemeral private key (64-char hex)
      * @param  string              $PB   Responder's static public key (128-char hex)
      * @param  string              $RB   Responder's ephemeral public key (128-char hex)
      * @param  int                 $klen Desired key length in bytes
@@ -78,7 +84,7 @@ class KeyExchange
      * K  = KDF(xV || yV || ZA || ZB, klen)
      *
      * @param  string              $dB   Responder's static private key (64-char hex)
-     * @param  string              $rB   Responder's ephemeral private key (64-char hex)
+     * @param  string              $rB   Fresh, one-session responder ephemeral private key (64-char hex)
      * @param  string              $PA   Initiator's static public key (128-char hex)
      * @param  string              $RA   Initiator's ephemeral public key (128-char hex)
      * @param  int                 $klen Desired key length in bytes
@@ -146,7 +152,8 @@ class KeyExchange
         string $PA,
         string $PB
     ): string {
-        return self::computeConfirmation(0x02, $xV, $yV, $ida, $idb, $RA, $RB, $PA, $PB);
+        // GM/T 0003.3: initiator's outgoing confirmation S_A uses prefix 0x03.
+        return self::computeConfirmation(0x03, $xV, $yV, $ida, $idb, $RA, $RB, $PA, $PB);
     }
 
     public static function computeResponderConfirmation(
@@ -159,16 +166,44 @@ class KeyExchange
         string $PA,
         string $PB
     ): string {
-        return self::computeConfirmation(0x03, $xV, $yV, $ida, $idb, $RA, $RB, $PA, $PB);
+        // GM/T 0003.3: responder's outgoing confirmation S_B uses prefix 0x02.
+        return self::computeConfirmation(0x02, $xV, $yV, $ida, $idb, $RA, $RB, $PA, $PB);
+    }
+
+    /** Verify the responder's received S_B against the initiator's expected S_1. */
+    public static function verifyResponderConfirmationForInitiator(string $expectedS1, string $receivedSB): bool
+    {
+        return self::verifyConfirmationValue($expectedS1, $receivedSB);
+    }
+
+    /** Verify the initiator's received S_A against the responder's expected S_2. */
+    public static function verifyInitiatorConfirmationForResponder(string $expectedS2, string $receivedSA): bool
+    {
+        return self::verifyConfirmationValue($expectedS2, $receivedSA);
+    }
+
+    private static function verifyConfirmationValue(string $expected, string $received): bool
+    {
+        if (!preg_match('/\A[0-9a-fA-F]{64}\z/', $expected)
+            || !preg_match('/\A[0-9a-fA-F]{64}\z/', $received)) {
+            return false;
+        }
+
+        return hash_equals(strtolower($expected), strtolower($received));
     }
 
     /**
      * Initiator key exchange with automatic key confirmation.
      *
-     * Computes the shared key AND the initiator confirmation hash (S1).
-     * The responder should verify S1, then compute S2 and send it back.
+     * Computes the key, expected responder confirmation S1, and outgoing S_A.
      *
-     * @return array{key: string, xV: string, yV: string, s1: string}
+     * S1 uses prefix 0x02 and must match the responder's S_B. S_A uses prefix
+     * 0x03 and is sent to the responder; the responder verifies it as S2.
+     * The returned `sa` is computed locally before the responder's message
+     * arrives. The caller MUST withhold it until `s1` has been verified against
+     * the received `sb`; use the explicit verify-then-send protocol ordering.
+     *
+     * @return array{key: string, xV: string, yV: string, s1: string, sa: string}
      */
     public static function initiatorComputeKeyWithConfirmation(
         string $dA,
@@ -180,19 +215,22 @@ class KeyExchange
         string $idb = '1234567812345678'
     ): array {
         $result = self::computeKey($dA, $rA, $PB, $RB, $klen, $ida, $idb, true);
-        $RA = Sm2::getPublicKey($rA);
+        $RA = Sm2::getEphemeralPublicKey($rA);
         $PA = Sm2::getPublicKey($dA);
-        $s1 = self::computeInitiatorConfirmation($result['xV'], $result['yV'], $ida, $idb, $RA, $RB, $PA, $PB);
-        return ['key' => $result['key'], 'xV' => $result['xV'], 'yV' => $result['yV'], 's1' => $s1];
+        $s1 = self::computeResponderConfirmation($result['xV'], $result['yV'], $ida, $idb, $RA, $RB, $PA, $PB);
+        $sa = self::computeInitiatorConfirmation($result['xV'], $result['yV'], $ida, $idb, $RA, $RB, $PA, $PB);
+        return ['key' => $result['key'], 'xV' => $result['xV'], 'yV' => $result['yV'], 's1' => $s1, 'sa' => $sa];
     }
 
     /**
      * Responder key exchange with automatic key confirmation.
      *
-     * Computes the shared key AND the responder confirmation hash (S2).
-     * The initiator should verify S2.
+     * Computes the key, outgoing responder confirmation S_B, and expected S2.
      *
-     * @return array{key: string, xV: string, yV: string, s2: string}
+     * S_B uses prefix 0x02 and is sent to the initiator. S2 uses prefix 0x03
+     * and must match the initiator's S_A.
+     *
+     * @return array{key: string, xV: string, yV: string, s2: string, sb: string}
      */
     public static function responderComputeKeyWithConfirmation(
         string $dB,
@@ -204,10 +242,11 @@ class KeyExchange
         string $idb = '1234567812345678'
     ): array {
         $result = self::computeKey($dB, $rB, $PA, $RA, $klen, $ida, $idb, false);
-        $RB = Sm2::getPublicKey($rB);
+        $RB = Sm2::getEphemeralPublicKey($rB);
         $PB = Sm2::getPublicKey($dB);
-        $s2 = self::computeResponderConfirmation($result['xV'], $result['yV'], $ida, $idb, $RA, $RB, $PA, $PB);
-        return ['key' => $result['key'], 'xV' => $result['xV'], 'yV' => $result['yV'], 's2' => $s2];
+        $sb = self::computeResponderConfirmation($result['xV'], $result['yV'], $ida, $idb, $RA, $RB, $PA, $PB);
+        $s2 = self::computeInitiatorConfirmation($result['xV'], $result['yV'], $ida, $idb, $RA, $RB, $PA, $PB);
+        return ['key' => $result['key'], 'xV' => $result['xV'], 'yV' => $result['yV'], 's2' => $s2, 'sb' => $sb];
     }
 
     private static function computeConfirmation(
@@ -221,6 +260,22 @@ class KeyExchange
         string $PA,
         string $PB
     ): string {
+        if (strlen($xV) !== 64 || strlen($yV) !== 64) {
+            throw new InvalidKeyException('Invalid SM2 key confirmation point: V coordinates must each be 64 hex characters');
+        }
+        $points = [
+            'V' => $xV . $yV,
+            'RA' => $RA,
+            'RB' => $RB,
+            'PA' => $PA,
+            'PB' => $PB,
+        ];
+        foreach ($points as $name => $point) {
+            if (!Sm2::isOnCurve($point)) {
+                throw new InvalidKeyException('Invalid SM2 key confirmation point: ' . $name);
+            }
+        }
+
         $prefixByte = chr(self::toByte($prefix));
         $za = Sm2::getUserIdDigest($ida, $PA);
         $zb = Sm2::getUserIdDigest($idb, $PB);
@@ -273,9 +328,15 @@ class KeyExchange
         string $idb,
         bool $isInitiator
     ): array {
+        // GM/T 0003 fixes ENTL at 16 bits, so reject oversized identities
+        // before doing the scalar multiplications below.
+        if (strlen($ida) > 8191 || strlen($idb) > 8191) {
+            throw new CryptoException('SM2 key exchange user ID exceeds the 16-bit ENTL limit (maximum 8191 bytes)');
+        }
+
         // Validate keys
         Sm2::validatePrivateKey($d);
-        Sm2::validatePrivateKey($r);
+        Sm2::validateEphemeralScalar($r);
 
         if (!Sm2::isOnCurve($P_other)) {
             throw new InvalidKeyException('Invalid other party static public key');
@@ -292,7 +353,7 @@ class KeyExchange
         }
 
         // Compute own ephemeral public key
-        $R_self = Sm2::getPublicKey($r);
+        $R_self = Sm2::getEphemeralPublicKey($r);
 
         // w = ⌈⌈log₂(n)⌉/2⌉ - 1, computed exactly from the bit length of n
         $n = Sm2::gmpParamPublic('n');
@@ -386,6 +447,23 @@ class KeyExchange
             $key .= Hex::fromHex($hash);
             $ct++;
         }
-        return bin2hex(substr($key, 0, $klen));
+        $derivedKey = substr($key, 0, $klen);
+        self::rejectAllZeroDerivedKey($derivedKey);
+
+        return bin2hex($derivedKey);
+    }
+
+    /** Reject the exceptional all-zero KDF output required by GM/T 0003.3. */
+    private static function rejectAllZeroDerivedKey(string $key): void
+    {
+        $nonZero = 0;
+        $length = strlen($key);
+        for ($i = 0; $i < $length; $i++) {
+            $nonZero |= ord($key[$i]);
+        }
+
+        if ($nonZero === 0) {
+            throw new CryptoException('SM2 key exchange failed: KDF derived an all-zero key');
+        }
     }
 }

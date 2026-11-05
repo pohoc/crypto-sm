@@ -22,8 +22,8 @@
     {
       "label": "SM4-GCM 加密 (1024B)",
       "max_avg_seconds": 0.0006,
-      "requires": "native_sm4",
-      "note": "GHASH is always pure PHP; block cipher acceleration dominates."
+      "requires": "native_sm4_or_gcm",
+      "note": "Uses native SM4-GCM when available; otherwise GHASH is PHP with SM4-ECB acceleration."
     },
     {
       "label": "SM2 签名 (16B)",

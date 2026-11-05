@@ -5,8 +5,9 @@
 SM3 是中国密码杂凑算法标准 (GM/T 0004-2012)，产生 256 位的哈希值。
 
 本实现特性：
-- **OpenSSL 加速**：自动检测 `hash_algos()` 中的 `sm3`（PHP ≥7.4 且链接 OpenSSL 1.1.1+ 时可用），可用时使用 C 原生实现（比纯 PHP 快约两个数量级以上）
+- **OpenSSL 加速**：在受支持的 PHP 8.2+ 环境中按运行时 `hash_algos()` 检测 `sm3`；可用时调用原生 hash 扩展实现，否则回退到纯 PHP
 - **纯 PHP 回退**：当 PHP 的 hash 扩展不支持 SM3 时自动回退
+- **平台要求**：纯 PHP SM3 回退需要 64 位 PHP；32 位 PHP 必须具备原生 `hash('sm3')` 支持，否则会明确抛出 `RuntimeException`，避免返回不可靠的摘要
 - **流式哈希**：支持分块更新，适用于大文件等场景
 - **HMAC-SM3**：RFC 2104 标准的 HMAC 实现
 
@@ -80,7 +81,7 @@ $hash = $hasher->finalize();
 echo "文件 SM3 哈希: $hash\n";
 ```
 
-> **性能提示**：流式哈希同样享受原生 `hash_init('sm3')` / `hash_update()` 加速；OpenSSL 不支持 SM3 时自动回退到纯 PHP 分块实现。
+> **性能提示**：流式哈希同样会在运行时支持时使用原生 `hash_init('sm3')` / `hash_update()`；否则自动回退到纯 PHP 分块实现。性能差异取决于环境，可运行仓库基准测试测量。
 
 ## HMAC-SM3
 
@@ -96,7 +97,13 @@ $data = 'message to authenticate';
 
 $hmac = HmacSm3::hmac($key, $data);
 echo $hmac; // 64 字符十六进制
+
+if (!HmacSm3::verify($key, $data, $receivedMac)) {
+    throw new RuntimeException('HMAC verification failed');
+}
 ```
+
+`verify()` 拒绝非 64 位十六进制值，并使用 `hash_equals()` 比较有效 MAC；也可通过 `SmCrypto::verifyHmacSm3()` 调用。
 
 ### 流式计算
 
@@ -114,6 +121,22 @@ echo $result; // 64 字符十六进制
 // finalize 后自动重置，可复用
 $result2 = $hmac->update('new data')->finalize();
 ```
+
+## PBKDF2-HMAC-SM3
+
+`Pbkdf2Sm3` 按 RFC 8018 §5.2 的 PBKDF2 构造，以 HMAC-SM3 作为 PRF。派生长度以字节计；底层 `derive()` 返回原始字节，`deriveHex()` 和 `SmCrypto::pbkdf2Sm3()` 返回小写十六进制：
+
+```php
+use CryptoSm\SM3\Pbkdf2Sm3;
+use CryptoSm\SmCrypto;
+
+$salt = random_bytes(16);
+$key = Pbkdf2Sm3::derive('user password', $salt, 100000, 32); // 32 个原始字节
+$keyHex = Pbkdf2Sm3::deriveHex('user password', $salt, 100000, 32);
+$keyHexViaFacade = SmCrypto::pbkdf2Sm3('user password', $salt, 100000, 32);
+```
+
+迭代数和派生长度必须为正数；超出 RFC 的 32-bit 派生块索引范围会被拒绝。盐应由 `random_bytes()` 生成并至少 16 字节。已发布的 [NIST SP 800-132](https://csrc.nist.gov/pubs/sp/800/132/final) 是 2010 年版本，给出的迭代数规则是尽可能提高到可接受的延迟；NIST 已宣布计划修订该文档。应用应根据目标硬件、延迟预算和适用策略选择并定期复核迭代数，不要把旧文档中的 1,000 下限当成现代推荐值。迭代数由调用方显式传入，不使用隐藏默认值。PBKDF2 用于口令派生；高强度口令存储场景还应考虑专为密码哈希设计的内存困难算法。
 
 ### 使用场景
 
@@ -200,12 +223,12 @@ echo "  流式   => " . $hmac->finalize() . "\n";
 - **分组大小**: 512 位（64 字节）
 - **算法结构**: Merkle-Damgård 结构
 - **标准**: GM/T 0004-2012、ISO/IEC 10118-3:2018
-- **OpenSSL 加速**: 通过 `in_array('sm3', hash_algos(), true)` 检测（PHP 7.4+ 且链接 OpenSSL 1.1.1+ 时可用）；流式路径使用 `hash_init('sm3')` 增量上下文
+- **原生 SM3 加速**: 在支持的环境中通过 `hash_algos()` 检测；流式路径使用 `hash_init('sm3')` 增量上下文
 - **流式哈希性能**: 原生 SM3 可用时使用增量 hash context，避免累积完整输入；OpenSSL 不支持 SM3 时使用纯 PHP 分块回退
 
 ## 安全注意事项
 
-1. SM3 适用于数字签名、消息认证和完整性验证
+1. SM3 是哈希函数：完整性校验必须通过可信渠道认证预期摘要；消息认证请使用 HMAC-SM3，数字签名请使用 SM2
 2. **不建议单独用于密码哈希**（密码哈希请使用 bcrypt 或 Argon2）
 3. HMAC-SM3 的密钥应使用密码学安全随机数生成
 4. 对于加密目的，请确保正确的密钥管理和安全的随机数生成

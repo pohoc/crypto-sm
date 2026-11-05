@@ -3,3 +3,5 @@ parameters:
     paths:
         - src
         - tests
+        - scripts/ReleaseVersion.php
+        - scripts/PackagistReleaseCheck.php

@@ -79,6 +79,6 @@ class Hex
 
     public static function isValidHex(string $hex): bool
     {
-        return $hex === '' || preg_match('/^[0-9a-fA-F]+$/', $hex) === 1;
+        return $hex === '' || preg_match('/\A[0-9a-fA-F]+\z/', $hex) === 1;
     }
 }

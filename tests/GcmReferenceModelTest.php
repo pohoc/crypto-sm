@@ -6,7 +6,7 @@ namespace CryptoSm\Tests;
 
 use CryptoSm\Crypto\Gcm;
 use CryptoSm\SM4\Sm4;
-use CryptoSm\SM4\Sm4Options;
+use CryptoSm\SM4\Sm4PurePhp;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -22,11 +22,104 @@ use PHPUnit\Framework\TestCase;
  * 库曾在差分验证中暴露真实缺陷：GHASH 的"字节位反射域"优化与归约多项式
  * 域不匹配，导致标签不符合 RFC 8998（密文正确）。修复后本文件全部通过。
  */
+/** @runTestsInSeparateProcesses */
+#[\PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses]
 class GcmReferenceModelTest extends TestCase
 {
+    public function testGcmUint64LengthEncodingIsBigEndian(): void
+    {
+        $encode = new \ReflectionMethod(Gcm::class, 'encodeUint64');
+        $this->assertSame("\0\0\0\0\x01\x02\x03\x04", $encode->invoke(null, 0x01020304));
+        if (PHP_INT_SIZE >= 8) {
+            $this->assertSame("\x01\x02\x03\x04\x05\x06\x07\x08", $encode->invoke(null, 0x0102030405060708));
+        }
+    }
+
+    public function testGcmExportHidesKeyAndHashSubkeyAfterUse(): void
+    {
+        $key = '0123456789abcdef';
+        $iv = str_repeat('v', 12);
+        $gcm = new Gcm($key);
+        $expected = $gcm->encrypt('message', $iv);
+        $copy = clone $gcm;
+        $copyIv = $iv . "\x00";
+        $copyResult = $copy->encrypt('message', $copyIv);
+        $this->assertNotSame('', $copyResult['tag']);
+        foreach ([$gcm, $copy] as $context) {
+            $export = var_export($context, true);
+            $this->assertStringNotContainsString($key, $export);
+            $this->assertStringNotContainsString('hGmp', $export);
+        }
+        $this->assertSame('message', $copy->decrypt($expected['ciphertext'], $expected['tag'], $iv));
+    }
     // ─── RFC 8998 A.1 官方向量 ────────────────────────────────────────────
 
     public function testRfc8998Sm4GcmVector(): void
+    {
+        $this->assertRfc8998Sm4GcmVector();
+    }
+
+    public function testNativeOpenSslSm4GcmVectorWhenAvailable(): void
+    {
+        $available = new \ReflectionMethod(Gcm::class, 'openSslGcmAvailable');
+        $available->setAccessible(true);
+        if (!$available->invoke(null)) {
+            $this->markTestSkipped('OpenSSL SM4-GCM AEAD is not executable in this environment');
+        }
+
+        $this->assertRfc8998Sm4GcmVector();
+    }
+
+    public function testNativeOpenSslSm4GcmRejectsAuthenticatedInputTamperingWhenAvailable(): void
+    {
+        $available = new \ReflectionMethod(Gcm::class, 'openSslGcmAvailable');
+        $available->setAccessible(true);
+        if (!$available->invoke(null)) {
+            $this->markTestSkipped('OpenSSL SM4-GCM AEAD is not executable in this environment');
+        }
+
+        $vector = $this->assertRfc8998Sm4GcmVector();
+        $badCiphertext = $vector['ciphertext'];
+        $badCiphertext[0] = $badCiphertext[0] === "\0" ? "\1" : "\0";
+        $badIv = $vector['iv'];
+        $badIv[0] = $badIv[0] === "\0" ? "\1" : "\0";
+        $badAad = $vector['aad'] . "\0";
+        $badTag = $vector['tag'];
+        $badTag[0] = $badTag[0] === "\0" ? "\1" : "\0";
+
+        foreach ([
+            [$badCiphertext, $vector['tag'], $vector['iv'], $vector['aad'], 'ciphertext'],
+            [$vector['ciphertext'], $vector['tag'], $badIv, $vector['aad'], 'IV'],
+            [$vector['ciphertext'], $vector['tag'], $vector['iv'], $badAad, 'AAD'],
+            [$vector['ciphertext'], $badTag, $vector['iv'], $vector['aad'], 'tag'],
+        ] as [$ciphertext, $tag, $iv, $aad, $field]) {
+            try {
+                Gcm::fromKey($vector['key'])->decrypt($ciphertext, $tag, $iv, $aad, 16);
+                self::fail('Native OpenSSL GCM accepted tampered ' . $field);
+            } catch (\CryptoSm\Exception\CryptoException $exception) {
+                self::assertStringContainsString('authentication tag mismatch', $exception->getMessage());
+            }
+        }
+    }
+
+    /** @runInSeparateProcess */
+    #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
+    public function testPurePhpGcmVectorWhenNativeAeadIsUnavailable(): void
+    {
+        $nativeAead = new \ReflectionProperty(Gcm::class, 'openSslGcmAvailable');
+        $nativeAead->setAccessible(true);
+        $nativeAead->setValue(null, false);
+        $nativeSm4 = new \ReflectionProperty(Sm4PurePhp::class, 'openSslSm4Available');
+        $nativeSm4->setAccessible(true);
+        $nativeSm4->setValue(null, false);
+
+        $this->assertRfc8998Sm4GcmVector();
+    }
+
+    /**
+     * @return array{key: string, iv: string, aad: string, ciphertext: string, tag: string}
+     */
+    private function assertRfc8998Sm4GcmVector(): array
     {
         $key = self::hexBytes('0123456789ABCDEFFEDCBA9876543210');
         $iv  = self::hexBytes('00001234567800000000ABCD');
@@ -38,6 +131,10 @@ class GcmReferenceModelTest extends TestCase
         $aad = self::hexBytes('FEEDFACEDEADBEEFFEEDFACEDEADBEEFABADDAD2');
 
         $r = Gcm::fromKey($key)->encrypt($pt, $iv, $aad, 16);
+        $reference = self::referenceEncrypt($key, $iv, $aad, $pt, 16);
+
+        $this->assertSame($reference['ciphertext'], $r['ciphertext'], 'GCM backend differs from PHP/GMP reference ciphertext');
+        $this->assertSame($reference['tag'], $r['tag'], 'GCM backend differs from PHP/GMP reference tag');
 
         $this->assertSame(
             strtolower('17F399F08C67D5EE19D0DC9969C4BB7D'
@@ -62,6 +159,8 @@ class GcmReferenceModelTest extends TestCase
             16
         );
         $this->assertSame(bin2hex($pt), bin2hex((string) $ptBack));
+
+        return ['key' => $key, 'iv' => $iv, 'aad' => $aad, 'ciphertext' => $r['ciphertext'], 'tag' => $r['tag']];
     }
 
     // ─── 独立参考模型（GMP 整数、规范直译）───────────────────────────────
@@ -88,13 +187,9 @@ class GcmReferenceModelTest extends TestCase
 
     private static function ecbBlock(string $keyBin, string $block): string
     {
-        $opts = new Sm4Options();
-        $opts->setMode(Sm4::MODE_ECB)->setPadding('none');
-        $hex = Sm4::encrypt($block, bin2hex($keyBin), $opts);
-        $bin = hex2bin($hex);
-        self::assertIsString($bin);
-
-        return $bin;
+        $engine = new Sm4PurePhp();
+        $engine->setKeyForMode($keyBin, Sm4::MODE_GCM);
+        return $engine->encryptBlock($block);
     }
 
     private static function padToBlock(string $data): string
@@ -185,14 +280,17 @@ class GcmReferenceModelTest extends TestCase
             [self::hexBytes('0f0e0d0c0b0a09080706050403020100'), str_repeat("\x11", 16), '', 'non-standard iv length', 16],
             // 非 96 位 IV：8 字节 + 12 字节标签
             [self::hexBytes('ffeeddccbbaa99887766554433221100'), str_repeat("\xab", 8), 'x', 'eight byte iv', 12],
-            // 短标签 4 字节
-            [self::hexBytes('00112233445566778899aabbccddeeff'), str_repeat("\x77", 12), 'auth only', str_repeat('t', 24), 4],
         ];
     }
 
     public function testLibraryMatchesReferenceModelOnFixedCases(): void
     {
         foreach (self::fixedCases() as $idx => [$keyBin, $iv, $aad, $pt, $tagLen]) {
+            // Cases 0 and 1 intentionally share a fixed IV in their source
+            // vectors; use a distinct key for case 1 so each key/IV pair stays unique.
+            if ($idx === 1) {
+                $keyBin[0] = chr(ord($keyBin[0]) ^ 1);
+            }
             $got = Gcm::fromKey($keyBin)->encrypt($pt, $iv, $aad, $tagLen);
             $want = self::referenceEncrypt($keyBin, $iv, $aad, $pt, $tagLen);
 
@@ -214,7 +312,7 @@ class GcmReferenceModelTest extends TestCase
             $iv = mt_rand(0, 1) === 0 ? self::randBytes(12) : self::randBytes(mt_rand(1, 32));
             $aad = self::randBytes(mt_rand(0, 40));
             $pt = self::randBytes(mt_rand(0, 100));
-            $tagLen = [4, 8, 12, 13, 14, 15, 16][mt_rand(0, 6)];
+            $tagLen = [12, 13, 14, 15, 16][mt_rand(0, 4)];
 
             $got = Gcm::fromKey($keyBin)->encrypt($pt, $iv, $aad, $tagLen);
             $want = self::referenceEncrypt($keyBin, $iv, $aad, $pt, $tagLen);

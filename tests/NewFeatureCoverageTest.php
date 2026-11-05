@@ -14,11 +14,22 @@ use PHPUnit\Framework\TestCase;
  * 本轮新增功能的错误分支与边界覆盖：
  * - SM2 密文 ASN.1 导出/导入（GM/T 0009）
  * - 压缩公钥导入（GM/T 0003.1）
- * - 曲线参数临时注入（useCurveParams/resetCurveParams）
  * - decompressPublicKey 校验分支
  */
 class NewFeatureCoverageTest extends TestCase
 {
+    private static function derCoordinate(string $coordinateHex): string
+    {
+        $bytes = ltrim((string) hex2bin($coordinateHex), "\0");
+        if ($bytes === '') {
+            $bytes = "\0";
+        } elseif ((ord($bytes[0]) & 0x80) !== 0) {
+            $bytes = "\0" . $bytes;
+        }
+
+        return "\x02" . chr(strlen($bytes)) . $bytes;
+    }
+
     // ─── SM2 密文 ASN.1 导出 ──────────────────────────────────────────────
 
     /**
@@ -48,15 +59,115 @@ class NewFeatureCoverageTest extends TestCase
         Pem::exportCiphertextAsn1($bad, Sm2::CIPHER_MODE_1);
     }
 
+    public function testExportAsn1RejectsNonHexC3(): void
+    {
+        [$ciphertext] = $this->makeCiphertext(Sm2::CIPHER_MODE_1);
+        $ciphertext[130] = 'z';
+
+        $this->expectException(InvalidKeyException::class);
+        $this->expectExceptionMessage('C2/C3 is not valid hex');
+        Pem::exportCiphertextAsn1($ciphertext, Sm2::CIPHER_MODE_1);
+    }
+
+    public function testExportAsn1RejectsNonHexC2(): void
+    {
+        [$ciphertext] = $this->makeCiphertext(Sm2::CIPHER_MODE_1);
+        $ciphertext[194] = 'z';
+
+        $this->expectException(InvalidKeyException::class);
+        $this->expectExceptionMessage('C2/C3 is not valid hex');
+        Pem::exportCiphertextAsn1($ciphertext, Sm2::CIPHER_MODE_1);
+    }
+
+    public function testExportAsn1RejectsEmptyC2(): void
+    {
+        [$ciphertext] = $this->makeCiphertext(Sm2::CIPHER_MODE_1);
+
+        $this->expectException(InvalidKeyException::class);
+        $this->expectExceptionMessage('C2/C3 is not valid hex');
+        Pem::exportCiphertextAsn1(substr($ciphertext, 0, 194), Sm2::CIPHER_MODE_1);
+    }
+
+    public function testExportAsn1RejectsOffCurveC1(): void
+    {
+        $ciphertext = str_repeat('0', 128) . str_repeat('a', 64) . '00';
+
+        $this->expectException(InvalidKeyException::class);
+        $this->expectExceptionMessage('C1 point is not on SM2 curve');
+        Pem::exportCiphertextAsn1($ciphertext, Sm2::CIPHER_MODE_1);
+    }
+
+    public function testCiphertextAsn1RejectsInvalidMode(): void
+    {
+        [$ciphertext] = $this->makeCiphertext(Sm2::CIPHER_MODE_1);
+
+        try {
+            Pem::exportCiphertextAsn1($ciphertext, 2);
+            $this->fail('Invalid export mode should be rejected');
+        } catch (InvalidKeyException $exception) {
+            $this->assertStringContainsString('Cipher mode must be', $exception->getMessage());
+        }
+
+        $der = Pem::exportCiphertextAsn1($ciphertext);
+        $this->expectException(InvalidKeyException::class);
+        $this->expectExceptionMessage('Cipher mode must be');
+        Pem::importCiphertextAsn1($der, 2);
+    }
+
+    public function testPrivateKeyExportRejectsOutOfRangeScalars(): void
+    {
+        $exporters = [
+            static fn (string $key): string => Pem::exportPrivateKey($key),
+            static fn (string $key): string => Pem::exportPrivateKeyPkcs8($key),
+            static fn (string $key): string => Pem::exportPrivateKeyPkcs8Der($key),
+        ];
+        $invalidKeys = [
+            str_repeat('0', 64),
+            'fffffffeffffffffffffffffffffffff7203df6b21c6052b53bbf40939d54123',
+        ];
+
+        foreach ($invalidKeys as $invalidKey) {
+            foreach ($exporters as $export) {
+                try {
+                    $export($invalidKey);
+                    $this->fail('Out-of-range SM2 private scalar should not be exported');
+                } catch (InvalidKeyException $exception) {
+                    $this->assertStringContainsString('range', $exception->getMessage());
+                }
+            }
+        }
+    }
+
+    public function testSec1PrivateKeyExportRejectsMismatchedPublicKey(): void
+    {
+        $privateKey = Sm2::generateKeyPairHex();
+        $otherKey = Sm2::generateKeyPairHex();
+        $exporters = [
+            static fn (): string => Pem::exportPrivateKey($privateKey->getPrivateKey(), $otherKey->getPublicKey()),
+            static fn (): string => Pem::exportPrivateKeyDer($privateKey->getPrivateKey(), $otherKey->getPublicKey()),
+        ];
+
+        foreach ($exporters as $export) {
+            try {
+                $export();
+                $this->fail('SEC1 export must reject a public key that does not match the private key');
+            } catch (InvalidKeyException $exception) {
+                $this->assertStringContainsString('public key does not match', $exception->getMessage());
+            }
+        }
+    }
+
     public function testExportAsn1Mode0ProducesCorrectOrder(): void
     {
         [$ct, ] = $this->makeCiphertext(Sm2::CIPHER_MODE_0);
         $der = Pem::exportCiphertextAsn1($ct, Sm2::CIPHER_MODE_0);
         // DER 结构必须以 SEQUENCE 开头
         $this->assertSame(0x30, ord($der[0]));
-        // 解析回 C1C2C3 并确认一致
+        // DER INTEGER 坐标不携带 SEC1 04 前缀；导入结果规范化为 x||y。
+        // 去掉加密输出中的前缀后，验证 C1C2C3 的顺序和内容一致。
         $back = Pem::importCiphertextAsn1($der, Sm2::CIPHER_MODE_0);
-        $this->assertSame(strtolower($ct), strtolower($back));
+        $this->assertStringStartsWith('04', $ct);
+        $this->assertSame(strtolower(substr($ct, 2)), strtolower($back));
     }
 
     public function testImportAsn1RejectsNonSequence(): void
@@ -120,12 +231,10 @@ class NewFeatureCoverageTest extends TestCase
 
     public function testImportAsn1RejectsWrongHashLength(): void
     {
-        $x = str_pad('05', 64, 'ab', STR_PAD_LEFT);
-        $y = substr(Sm2::getPublicKey($x), 64, 64); // 合法 y
-        $yBytes = hex2bin($y);
+        $pub = Sm2::generateKeyPairHex()->getPublicKey();
 
-        $content = "\x02\x20" . (string) hex2bin(substr($x, 0, 64))
-            . "\x02\x20" . $yBytes
+        $content = self::derCoordinate(substr($pub, 0, 64))
+            . self::derCoordinate(substr($pub, 64, 64))
             . "\x04\x10" . str_repeat("\xCC", 16); // hash 只有 16 字节
         $der = "\x30" . chr(strlen($content)) . $content;
         $this->expectException(InvalidKeyException::class);
@@ -141,10 +250,25 @@ class NewFeatureCoverageTest extends TestCase
         $content = "\x02\x20" . $xBin
             . "\x02\x20" . $yBin
             . "\x04\x20" . str_repeat("\x03", 32)
-            . "\x04\x00";
+            . "\x04\x01\x00";
         $der = "\x30" . chr(strlen($content)) . $content;
         $this->expectException(InvalidKeyException::class);
         $this->expectExceptionMessage('not on curve');
+        Pem::importCiphertextAsn1($der);
+    }
+
+    public function testImportAsn1RejectsEmptyCipherText(): void
+    {
+        $publicKey = Sm2::getPublicKey(str_pad('1', 64, '0', STR_PAD_LEFT));
+        $x = self::derCoordinate(substr($publicKey, 0, 64));
+        $y = self::derCoordinate(substr($publicKey, 64, 64));
+        $hash = "\x04\x20" . str_repeat("\0", 32);
+        $cipherText = "\x04\x00";
+        $content = $x . $y . $hash . $cipherText;
+        $der = "\x30" . chr(strlen($content)) . $content;
+
+        $this->expectException(InvalidKeyException::class);
+        $this->expectExceptionMessage('cipherText must not be empty');
         Pem::importCiphertextAsn1($der);
     }
 
@@ -152,11 +276,8 @@ class NewFeatureCoverageTest extends TestCase
     {
         // 使用合法点但缺少 cipherText 字段
         $pub = Sm2::generateKeyPairHex()->getPublicKey();
-        $xBytes = hex2bin(substr($pub, 0, 64));
-        $yBytes = hex2bin(substr($pub, 64, 64));
-
-        $content = "\x02\x20" . $xBytes
-            . "\x02\x20" . $yBytes
+        $content = self::derCoordinate(substr($pub, 0, 64))
+            . self::derCoordinate(substr($pub, 64, 64))
             . "\x04\x20" . str_repeat("\x03", 32);
         // 无最后的 OCTET STRING
         $der = "\x30" . chr(strlen($content)) . $content;
@@ -211,35 +332,5 @@ class NewFeatureCoverageTest extends TestCase
             }
         }
         unset($isOdd);
-    }
-
-    // ─── 曲线参数注入 ─────────────────────────────────────────────────────
-
-    public function testUseCurveParamsRejectsMissingKey(): void
-    {
-        $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Missing or invalid');
-        Sm2::useCurveParams(['p' => str_repeat('a', 64)]);
-        Sm2::resetCurveParams(); // cleanup
-    }
-
-    public function testUseCurveParamsRejectsBadFormat(): void
-    {
-        $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Missing or invalid');
-        Sm2::useCurveParams([
-            'p' => 'short', 'a' => str_repeat('a', 64), 'b' => str_repeat('b', 64),
-            'n' => str_repeat('c', 64), 'gX' => str_repeat('d', 64), 'gY' => str_repeat('e', 64),
-        ]);
-        Sm2::resetCurveParams();
-    }
-
-    public function testResetCurveParamsIsIdempotent(): void
-    {
-        Sm2::resetCurveParams();
-        Sm2::resetCurveParams();
-        // 不应抛异常，标准参数仍然可用
-        $kp = Sm2::generateKeyPairHex();
-        $this->assertMatchesRegularExpression('/^[0-9a-f]{128}$/', $kp->getPublicKey());
     }
 }

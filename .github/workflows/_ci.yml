@@ -6,7 +6,11 @@ on:
       php-versions:
         required: false
         type: string
-        default: '["8.0", "8.1", "8.2", "8.3", "8.4", "8.5"]'
+        default: '["8.2", "8.3", "8.4", "8.5"]'
+      checkout-ref:
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -17,6 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.checkout-ref || github.sha }}
       - uses: shivammathur/setup-php@8358ee0e2e8afe63c2fb8253d1d52085811ab1e5 # v2
         with:
           php-version: '8.4'
@@ -37,6 +43,8 @@ jobs:
         dependencies: [lowest, highest]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.checkout-ref || github.sha }}
       - uses: shivammathur/setup-php@8358ee0e2e8afe63c2fb8253d1d52085811ab1e5 # v2
         with:
           php-version: ${{ matrix.php }}
@@ -57,6 +65,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.checkout-ref || github.sha }}
       - uses: shivammathur/setup-php@8358ee0e2e8afe63c2fb8253d1d52085811ab1e5 # v2
         with:
           php-version: '8.4'
@@ -73,6 +83,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.checkout-ref || github.sha }}
       - uses: shivammathur/setup-php@8358ee0e2e8afe63c2fb8253d1d52085811ab1e5 # v2
         with:
           php-version: '8.4'
@@ -81,3 +93,24 @@ jobs:
           coverage: none
       - run: composer install --no-interaction --no-progress --prefer-dist
       - run: composer audit --no-interaction
+
+  gate:
+    name: CI Gate
+    if: ${{ always() }}
+    needs: [composer, tests, quality, security]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every quality and test job to succeed
+        env:
+          COMPOSER_RESULT: ${{ needs.composer.result }}
+          TESTS_RESULT: ${{ needs.tests.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          SECURITY_RESULT: ${{ needs.security.result }}
+        run: |
+          set -euo pipefail
+          for result in "$COMPOSER_RESULT" "$TESTS_RESULT" "$QUALITY_RESULT" "$SECURITY_RESULT"; do
+            if [[ "$result" != success ]]; then
+              echo "::error::Required CI job result: $result"
+              exit 1
+            fi
+          done

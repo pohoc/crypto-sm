@@ -21,6 +21,7 @@ declare(strict_types=1);
 
 $root = dirname(__DIR__);
 chdir($root);
+require_once __DIR__ . '/ReleaseVersion.php';
 
 $options = parseArgs($argv);
 $fromTag = $options['from'] ?? null;
@@ -116,8 +117,11 @@ function getTags(): array
     $tags = array_filter($output);
 
     // 语义化版本排序
-    usort($tags, function ($a, $b) {
-        return version_compare(ltrim($a, 'v'), ltrim($b, 'v'));
+    usort($tags, static function (string $a, string $b): int {
+        if (!str_starts_with($a, 'v') || !str_starts_with($b, 'v')) {
+            throw new RuntimeException('All changelog release tags must use v-prefixed SemVer.');
+        }
+        return ReleaseVersion::compare(substr($a, 1), substr($b, 1));
     });
 
     return $tags;
@@ -126,7 +130,7 @@ function getTags(): array
 function getTagDate(string $tag): ?DateTime
 {
     $output = [];
-    exec("git log -1 --format=%ai " . escapeshellarg($tag), $output);
+    exec("git log -1 --format=%ai --end-of-options " . escapeshellarg($tag), $output);
     if (!empty($output[0])) {
         return new DateTime(trim($output[0]));
     }
@@ -151,7 +155,7 @@ function buildRanges(array $tags): array
 function getCommits(string $range): array
 {
     $output = [];
-    exec("git log --no-merges --format=%s " . escapeshellarg($range), $output);
+    exec("git log --no-merges --format=%s --end-of-options " . escapeshellarg($range), $output);
     return array_filter($output);
 }
 

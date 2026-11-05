@@ -81,11 +81,11 @@ class SecurityFixTest extends TestCase
 
     public function testPrivateKeyNMinus1Rejected(): void
     {
-        // d = n-1 时，d+1 = n，gmp_invert(n, n) 不存在
         $n = 'FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123';
         $nMinus1 = str_pad(strtolower(gmp_strval(gmp_sub(gmp_init($n, 16), 1), 16)), 64, '0', STR_PAD_LEFT);
-        $this->expectException(CryptoException::class);
-        Sm2::doSignature('test n-1', $nMinus1);
+        $this->expectException(InvalidKeyException::class);
+        $this->expectExceptionMessage('range [1, n-2]');
+        Sm2::validatePrivateKey($nMinus1);
     }
 
     // ========================================================================
@@ -97,11 +97,11 @@ class SecurityFixTest extends TestCase
         $kp = Sm2::generateKeyPairHex();
         $ct = Sm2::doEncrypt('secret message', $kp->getPublicKey());
 
-        // Mode 1: C1(128) + C3(64) + C2
+        // Mode 1: C1(130, including SEC1 04 prefix) + C3(64) + C2
         // 篡改 C3 部分
-        $c1 = substr($ct, 0, 128);
-        $c3 = substr($ct, 128, 64);
-        $c2 = substr($ct, 192);
+        $c1 = substr($ct, 0, 130);
+        $c3 = substr($ct, 130, 64);
+        $c2 = substr($ct, 194);
 
         // 修改 C3 的一个字符
         $tamperedC3 = $c3;
@@ -119,9 +119,9 @@ class SecurityFixTest extends TestCase
         $opts = (new Sm2CipherOptions())->setCipherMode(Sm2::CIPHER_MODE_0);
         $ct = Sm2::doEncrypt('mode0 test', $kp->getPublicKey(), $opts);
 
-        // Mode 0: C1(128) + C2 + C3(64)
-        $c1 = substr($ct, 0, 128);
-        $c2 = substr($ct, 128, -64);
+        // Mode 0: C1(130, including SEC1 04 prefix) + C2 + C3(64)
+        $c1 = substr($ct, 0, 130);
+        $c2 = substr($ct, 130, -64);
         $c3 = substr($ct, -64);
 
         $tamperedC3 = $c3;
@@ -138,23 +138,19 @@ class SecurityFixTest extends TestCase
 
     public function testKdfCounterOverflowProtection(): void
     {
-        // 通过反射将 maxCt 限制改小来测试溢出逻辑，避免内存溢出
-        // 直接测试：keyLen 超过单次迭代产出时，循环会递增 ct
-        // 我们无法安全地测试 0xFFFFFFFF 次迭代（内存不够），
-        // 所以验证正常 KDF 工作并检查溢出保护代码存在
-        $ref = new \ReflectionClass(Sm2::class);
-        $method = $ref->getMethod('kdf');
-        $method->setAccessible(true);
+        $method = new \ReflectionMethod(Sm2::class, 'kdfXor');
+        $empty = $method->invoke(null, 'deadbeef', '');
+        $this->assertSame(['data' => '', 'allZero' => true], $empty);
 
-        // 正常 KDF 应工作
-        $result = $method->invoke(null, 'deadbeef', 32);
-        if (!is_string($result)) {
-            $this->fail('KDF should return a string');
-        }
-        $this->assertEquals(32, strlen($result));
-
-        // 验证溢出保护逻辑存在（通过检查源码中的常量）
-        // maxCt = 0xFFFFFFFF 在 kdf 方法中定义
+        $input = random_bytes(65);
+        $result = $method->invoke(null, 'deadbeef', $input);
+        $hexResult = $method->invoke(null, 'deadbeef', $input, true);
+        $this->assertIsArray($result);
+        $this->assertIsArray($hexResult);
+        $this->assertIsString($result['data']);
+        $this->assertIsString($hexResult['data']);
+        $this->assertSame(65, strlen($result['data']));
+        $this->assertSame(130, strlen($hexResult['data']));
         $this->assertTrue($method->isPrivate());
     }
 
@@ -432,6 +428,8 @@ class SecurityFixTest extends TestCase
     // SM4 OpenSSL 扩展检测
     // ========================================================================
 
+    /** @runInSeparateProcess */
+    #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
     public function testSm4RequiresOpenSslExtension(): void
     {
         // 当 OpenSSL 扩展未加载时应抛出 CryptoException
@@ -572,6 +570,18 @@ class SecurityFixTest extends TestCase
     // SM2 密钥格式验证
     // ========================================================================
 
+    public function testSignatureOptionsRejectsPublicKeyWithTrailingNewline(): void
+    {
+        $this->expectException(InvalidKeyException::class);
+        (new SignatureOptions())->setPublicKey(str_repeat('1', 128) . "\n");
+    }
+
+    public function testPrivateKeyValidationRejectsTrailingNewline(): void
+    {
+        $this->expectException(InvalidKeyException::class);
+        Sm2::validatePrivateKey(str_pad('1', 64, '0', STR_PAD_LEFT) . "\n");
+    }
+
     public function testPrivateKeyValidationRejectsShortKey(): void
     {
         $this->expectException(InvalidKeyException::class);
@@ -622,6 +632,8 @@ class SecurityFixTest extends TestCase
     // SM4 篡改密文检测
     // ========================================================================
 
+    /** @runInSeparateProcess */
+    #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
     public function testSm4TamperedCiphertextDetected(): void
     {
         $key = '0123456789abcdeffedcba9876543210';
@@ -656,6 +668,12 @@ class SecurityFixTest extends TestCase
         $this->assertEquals($sHex, $decodedS);
     }
 
+    public function testEncodeIntegerRejectsTrailingNewline(): void
+    {
+        $this->expectException(CryptoException::class);
+        Asn1::encodeInteger("a\n");
+    }
+
     public function testEncodeIntegerEmptyHexRejected(): void
     {
         $this->expectException(CryptoException::class);
@@ -670,10 +688,11 @@ class SecurityFixTest extends TestCase
     {
         $kp = Sm2::generateKeyPairHex();
 
-        // 192 hex chars 是最小长度 (C1=128 + C3=64 + C2=0)
-        $ct = Sm2::doEncrypt('', $kp->getPublicKey());
-        $this->assertEquals(192, strlen($ct));
-        $this->assertEquals('', Sm2::doDecrypt($ct, $kp->getPrivateKey()));
+        // A valid C1 plus C3 but no C2 reaches uniform ciphertext verification failure.
+        $ciphertext = Sm2::getPublicKey($kp->getPrivateKey()) . str_repeat('0', 64);
+        $this->expectException(CryptoException::class);
+        $this->expectExceptionMessage('ciphertext verification failed');
+        Sm2::doDecrypt($ciphertext, $kp->getPrivateKey());
     }
 
     public function testDecryptCiphertextTooShortRejected(): void

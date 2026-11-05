@@ -60,7 +60,7 @@ class ErrorBranchCoverageTest extends TestCase
     {
         $this->expectException(InvalidKeyException::class);
         $this->expectExceptionMessage('32 hex chars (16 bytes) for CBC mode');
-        (new Sm4Options())->setIv('000102030405060708090a0b');
+        (new Sm4Options())->setMode(Sm4::MODE_CBC)->setIv('000102030405060708090a0b');
     }
 
     public function testSetIvRejectsShortIvForGcm(): void
@@ -166,11 +166,9 @@ class ErrorBranchCoverageTest extends TestCase
             16
         ), 1), 16), 64, '0', STR_PAD_LEFT);
         $privateKey = $nMinus1Hex;
-        Sm2::validatePrivateKey($privateKey); // n-1 在合法私钥范围内
-
-        $this->expectException(CryptoException::class);
-        $this->expectExceptionMessage('d=n-1 is not supported');
-        Sm2::doSignature('msg', $privateKey);
+        $this->expectException(InvalidKeyException::class);
+        $this->expectExceptionMessage('range [1, n-2]');
+        Sm2::validatePrivateKey($privateKey);
     }
 
     public function testGetUserIdDigestRejectsOffCurvePublicKey(): void
@@ -180,13 +178,17 @@ class ErrorBranchCoverageTest extends TestCase
         Sm2::getUserIdDigest('1234567812345678', str_repeat('01', 64));
     }
 
-    public function testEncryptEmptyPlaintextRoundTripBothModes(): void
+    public function testEncryptRejectsEmptyPlaintextBothModes(): void
     {
         $kp = Sm2::generateKeyPairHex();
         foreach ([Sm2::CIPHER_MODE_1, Sm2::CIPHER_MODE_0] as $mode) {
             $options = (new \CryptoSm\SM2\Sm2CipherOptions())->setCipherMode($mode);
-            $ct = Sm2::doEncrypt('', $kp->getPublicKey(), $options);
-            $this->assertSame('', Sm2::doDecrypt($ct, $kp->getPrivateKey(), $options));
+            try {
+                Sm2::doEncrypt('', $kp->getPublicKey(), $options);
+                $this->fail('Empty SM2 plaintext must be rejected');
+            } catch (InvalidKeyException $e) {
+                $this->assertStringContainsString('must not be empty', $e->getMessage());
+            }
         }
     }
 
@@ -242,13 +244,12 @@ class ErrorBranchCoverageTest extends TestCase
 
     public function testDecryptPayloadRejectsUnknownModeViaOptionsValidation(): void
     {
-        // 注：Sm4Options::setMode 与 decryptPayload 的白名单一致，
-        // 未知模式会先被选项校验拦截；payload 层的分支为纵深防御
+        // Payload mode is untrusted and must be rejected before expected-mode comparison.
         [, $key] = $this->validPayload();
         $payload = ['version' => 1, 'algorithm' => 'SM4', 'mode' => 'ofb8'];
 
         $this->expectException(InvalidKeyException::class);
-        $this->expectExceptionMessage('Mode must be one of');
+        $this->expectExceptionMessage('Unsupported SM4 payload mode');
         Sm4::decryptPayload($payload, $key);
     }
 
@@ -266,7 +267,7 @@ class ErrorBranchCoverageTest extends TestCase
 
         $this->expectException(InvalidKeyException::class);
         $this->expectExceptionMessage('Zero padding is ambiguous');
-        Sm4::decryptPayload($payload, $key);
+        Sm4::decryptPayload($payload, $key, Sm4::MODE_CBC);
     }
 
     public function testDecryptPayloadRejectsBadHexStringField(): void
@@ -285,10 +286,10 @@ class ErrorBranchCoverageTest extends TestCase
 
     public function testDecryptPayloadRoundTripAllModes(): void
     {
-        $key = str_repeat('cd', 16);
         foreach ([Sm4::MODE_CBC, Sm4::MODE_CFB, Sm4::MODE_OFB, Sm4::MODE_CTR, Sm4::MODE_ECB] as $mode) {
+            $key = substr(hash('sha256', 'payload-roundtrip-' . $mode), 0, 32);
             $payload = Sm4::encryptPayload('roundtrip ' . $mode, $key, (new Sm4Options())->setMode($mode));
-            $this->assertSame('roundtrip ' . $mode, Sm4::decryptPayload($payload, $key), "mode=$mode");
+            $this->assertSame('roundtrip ' . $mode, Sm4::decryptPayload($payload, $key, $mode), "mode=$mode");
         }
     }
 
@@ -542,11 +543,11 @@ class ErrorBranchCoverageTest extends TestCase
         // 构造末字节为 0x00 的合法块（padding=none），再用 iso10126/ansix923 解填充 → 必然失败
         $block = str_repeat('A', 15) . "\x00";
         $iv = str_repeat('11', 16);
-        $ct = Sm4::encrypt($block, $key, (new Sm4Options())->setIv($iv)->setPadding('none'));
+        $ct = Sm4::encrypt($block, $key, (new Sm4Options())->setMode(Sm4::MODE_CBC)->setIv($iv)->setPadding('none'));
 
         foreach (['iso10126', 'ansix923'] as $padding) {
             try {
-                Sm4::decrypt($ct, $key, (new Sm4Options())->setIv($iv)->setPadding($padding));
+                Sm4::decrypt($ct, $key, (new Sm4Options())->setMode(Sm4::MODE_CBC)->setIv($iv)->setPadding($padding));
                 $this->fail("expected Decryption failed for {$padding}");
             } catch (CryptoException $e) {
                 $this->assertSame('Decryption failed', $e->getMessage());
@@ -558,7 +559,7 @@ class ErrorBranchCoverageTest extends TestCase
     {
         $this->expectException(InvalidKeyException::class);
         $this->expectExceptionMessage('multiple of 16');
-        Sm4::encrypt('short', str_repeat('ab', 16), (new Sm4Options())->setPadding('none'));
+        Sm4::encrypt('short', str_repeat('ab', 16), (new Sm4Options())->setMode(Sm4::MODE_CBC)->setPadding('none'));
     }
 
     public function testKeyExchangeConfirmationRoundTrip(): void
@@ -584,6 +585,8 @@ class ErrorBranchCoverageTest extends TestCase
         );
 
         $this->assertSame($init['key'], $resp['key']);
+        $this->assertTrue(hash_equals($init['s1'], $resp['sb']));
+        $this->assertTrue(hash_equals($resp['s2'], $init['sa']));
         $this->assertMatchesRegularExpression('/^[0-9a-f]{64}$/', $init['s1']);
         $this->assertMatchesRegularExpression('/^[0-9a-f]{64}$/', $resp['s2']);
         $this->assertSame(KeyExchange::initiatorComputeKeyFull(
@@ -966,31 +969,31 @@ class ErrorBranchCoverageTest extends TestCase
         }
     }
 
-    public function testPkcs8WithRawKeyOctetStringImports(): void
+    public function testPkcs8WithRawKeyOctetStringIsRejected(): void
     {
-        // 某些工具输出的 PKCS#8 OCTET STRING 内是裸 32 字节密钥而非 SEC1 结构，
-        // 库必须支持该变体（parsePkcs8PrivateKey 的 raw-key 分支）
-        $privHex = bin2hex(random_bytes(32));
-        while (!preg_match('/^[1-9a-f]/', $privHex[0]) || gmp_cmp(gmp_init($privHex, 16), gmp_init(
-            'FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123',
-            16
-        )) >= 0 || gmp_cmp(gmp_init($privHex, 16), gmp_init(1)) < 0) {
-            $privHex = bin2hex(random_bytes(32));
+        $privHex = Sm2::generateKeyPairHex()->getPrivateKey();
+        $rawVariant = $this->buildPkcs8($this->extractAlgSeq(), (string) hex2bin($privHex));
+
+        $this->expectException(InvalidKeyException::class);
+        $this->expectExceptionMessage('expected SEC1 ECPrivateKey structure');
+        Pem::importPrivateKeyFromDer($rawVariant);
+    }
+
+    public function testPkcs8RawKeysStartingWithSequenceTagAreRejected(): void
+    {
+        // A bare scalar is rejected even when its first byte resembles a DER SEQUENCE tag.
+        $algSeq = $this->extractAlgSeq();
+        foreach ([32, 16] as $byteLength) {
+            $scalarBytes = "\x30" . str_repeat("\0", $byteLength - 2) . "\x01";
+            $rawVariant = $this->buildPkcs8($algSeq, $scalarBytes);
+
+            try {
+                Pem::importPrivateKeyFromDer($rawVariant);
+                $this->fail('Bare scalar PKCS#8 OCTET STRING must be rejected');
+            } catch (InvalidKeyException $exception) {
+                $this->assertStringContainsString('expected SEC1 ECPrivateKey structure', $exception->getMessage());
+            }
         }
-
-        $std = Pem::exportPrivateKeyPkcs8Der($privHex);
-        // 结构：30 L1 02 01 00 30 L2 <algSeq> ... 定位 AlgorithmIdentifier
-        $algSeqPos = strpos($std, "\x30", 3); // version INTEGER 之后
-        $this->assertNotFalse($algSeqPos);
-        $algSeqLen = ord($std[$algSeqPos + 1]);
-        $algSeq = substr($std, $algSeqPos, $algSeqLen + 2);
-
-        $content = "\x02\x01\x00" . $algSeq . "\x04\x20" . hex2bin($privHex);
-        $rawVariant = "\x30" . chr(strlen($content)) . $content;
-
-        $imported = Pem::importPrivateKeyFromDer($rawVariant);
-        $this->assertSame($privHex, $imported['privateKey']);
-        $this->assertTrue(Sm2::isOnCurve($imported['publicKey']));
     }
 
     public function testSpkiImportRejectsOffCurvePoint(): void
@@ -1068,6 +1071,24 @@ class ErrorBranchCoverageTest extends TestCase
             $this->assertStringContainsString('OCTET STRING', $e->getMessage());
         }
     }
+
+    public function testPkcs8InnerSec1MayOmitCurveParametersWhenOuterAlgorithmDeclaresSm2(): void
+    {
+        $privateKey = '09' . str_repeat('ab', 31);
+        $sec1 = Pem::exportPrivateKeyDer($privateKey);
+        $curveOffset = strpos($sec1, "\xa0");
+        self::assertNotFalse($curveOffset);
+        $curveLength = ord($sec1[$curveOffset + 1]) + 2;
+        $innerBody = substr($sec1, 2, $curveOffset - 2)
+            . substr($sec1, $curveOffset + $curveLength);
+        $inner = "\x30" . chr(strlen($innerBody)) . $innerBody;
+
+        $algSeq = $this->extractAlgSeq();
+        $imported = Pem::importPrivateKeyFromDer($this->buildPkcs8($algSeq, $inner));
+
+        $this->assertSame($privateKey, $imported['privateKey']);
+        $this->assertSame(Sm2::getPublicKey($privateKey), $imported['publicKey']);
+    }
     // ─── 第四批：PKCS#8 解析器与 OID 解码分支 ─────────────────────────────
 
     /**
@@ -1118,23 +1139,21 @@ class ErrorBranchCoverageTest extends TestCase
     public function testPkcs8ParserStructuralBranches(): void
     {
         $algSeq = $this->extractAlgSeq();
-        $privHex = str_pad('11', 64, 'cd', STR_PAD_LEFT);
-        $sec1Inner = Pem::exportPrivateKeyDer($privHex);
 
-        // OCTET STRING 内部不是 SEQUENCE 且长度非法（>32 字节）
+        // OCTET STRING 内不是完整 SEC1 ECPrivateKey，而是过长的裸标量数据。
         try {
             Pem::importPrivateKeyFromDer($this->buildPkcs8($algSeq, str_repeat("\x41", 33)));
-            $this->fail('oversized raw key should fail');
+            $this->fail('raw key OCTET STRING should fail');
         } catch (InvalidKeyException $e) {
-            $this->assertStringContainsString('length', $e->getMessage());
+            $this->assertStringContainsString('expected SEC1 ECPrivateKey structure', $e->getMessage());
         }
 
-        // 裸密钥为全零：通过格式校验但被范围校验拒绝
+        // 全零裸标量也必须先因容器格式错误而拒绝。
         try {
             Pem::importPrivateKeyFromDer($this->buildPkcs8($algSeq, str_repeat("\x00", 32)));
             $this->fail('zero raw key should fail');
         } catch (InvalidKeyException $e) {
-            $this->assertStringContainsString('range', $e->getMessage());
+            $this->assertStringContainsString('expected SEC1 ECPrivateKey structure', $e->getMessage());
         }
     }
 
