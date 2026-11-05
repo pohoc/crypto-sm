@@ -4,6 +4,9 @@
 
 ## [v0.4.1] - 2026-11-05
 
+### 变更
+- (release) 🎡 合并为单一发布流程
+
 ### 文档
 - (changelog) update v0.4.0 release notes
 
