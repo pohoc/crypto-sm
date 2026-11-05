@@ -226,7 +226,6 @@ jobs:
           ' CHANGELOG.md > "$RUNNER_TEMP/version-changelog.md"
           test -s "$RUNNER_TEMP/version-changelog.md"
           {
-            printf '# Release %s\n\n' "$TAG"
             printf '迁移及安全配置说明：[升级迁移指南](https://github.com/%s/blob/%s/docs/migration.md)。\n\n' "$GITHUB_REPOSITORY" "$TAG"
             cat "$RUNNER_TEMP/version-changelog.md"
           } > "$RUNNER_TEMP/release-notes.md"
