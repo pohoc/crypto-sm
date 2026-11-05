@@ -2,6 +2,34 @@
 
 本文件由脚本自动生成，基于 git tag 和 commit 记录。
 
+## [v0.4.0] - 2026-11-05
+
+### 修复
+- (ci) 🐛 修复工作流脚本调用顺序
+- (sm4) 🔒 澄清 CBC tracker 并补齐回归覆盖
+- (tests) 🧪 让 tracker 优先级断言可被静态分析
+- (benchmark) ⚙️ 识别原生 SM4-GCM 后端
+
+### 变更
+- (release) 🎡 加固版本发布流程
+- (release) 🎡 完善自动化发布流程
+- 🔒 加固国密实现并清理密钥扫描命中
+- ⚙️ 完善 Composer CI/CD 与测试
+- ⚙️ 按 PHP 版本解析兼容依赖
+
+### 文档
+- (crypto-sm) 📝 补齐安全与兼容性说明
+- (security) 📝 明确流追踪器覆盖优先级
+- (security) 📝 澄清密钥迁移与模式追踪
+- (security) 📝 补充升级与追踪器接入指南
+- 补充 CHANGELOG v0.3.0 条目
+- 补充 CHANGELOG v0.2.1~v0.2.3 条目并整理 v0.2.0
+
+### 测试
+- (security) ✅ 验证追踪器优先级与历史 CBC
+- (security) ✅ 覆盖 GCM 密钥拒绝旧 CBC 读取
+- (security) ✅ 覆盖共享追踪器故障关闭
+
 ## [v0.3.0] - 2026-08-27
 
 ### 修复
@@ -145,3 +173,4 @@
 [v0.2.2]: https://github.com/pohoc/crypto-sm/compare/v0.2.1...v0.2.2
 [v0.2.3]: https://github.com/pohoc/crypto-sm/compare/v0.2.2...v0.2.3
 [v0.3.0]: https://github.com/pohoc/crypto-sm/compare/v0.2.3...v0.3.0
+[v0.4.0]: https://github.com/pohoc/crypto-sm/compare/v0.3.0...v0.4.0
