@@ -1,4 +1,4 @@
-name: Start Release
+name: Release
 
 on:
   workflow_dispatch:
@@ -15,6 +15,7 @@ concurrency:
 permissions:
   contents: read
   actions: read
+  checks: read
   pull-requests: read
 
 jobs:
@@ -44,17 +45,6 @@ jobs:
           git fetch origin main --prune --tags
           MAIN_SHA="$(git rev-parse HEAD)"
           test "$MAIN_SHA" = "$(git rev-parse origin/main)"
-
-          OPEN_CHANGELOG_PRS="$(gh pr list --base main --state open --json headRefName --jq '[.[] | select(.headRefName | startswith("release/changelog-"))] | length')"
-          if [[ "$OPEN_CHANGELOG_PRS" != 0 ]]; then
-            echo '::error::A release changelog PR is still open. Resolve or resume that release first.'
-            exit 1
-          fi
-          ACTIVE_RELEASE_RUNS="$(gh run list --workflow release.yml --limit 20 --json status --jq '[.[] | select(.status == "queued" or .status == "in_progress" or .status == "waiting")] | length')"
-          if [[ "$ACTIVE_RELEASE_RUNS" != 0 ]]; then
-            echo '::error::A Release workflow is still running or waiting for approval.'
-            exit 1
-          fi
 
           mapfile -t TAGS < <(git tag --list 'v*')
           VERSION="$(php scripts/ReleaseVersion.php "$VERSION" "${TAGS[@]}" --allow-existing)"
@@ -111,26 +101,31 @@ jobs:
             echo 'complete=false'
           } >> "$GITHUB_OUTPUT"
 
-  full-ci:
+  create-tag:
+    name: Verify CI and create or resume tag
     needs: validate-version
     if: needs.validate-version.outputs.complete != 'true'
-    uses: ./.github/workflows/_ci.yml
-    with:
-      checkout-ref: ${{ needs.validate-version.outputs.sha }}
-
-  create-tag-and-start-release:
-    name: Create or resume tag and start Release workflow
-    needs: [validate-version, full-ci]
-    if: needs.validate-version.outputs.complete != 'true'
     runs-on: ubuntu-latest
-    environment: release
     permissions:
       contents: write
+      checks: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: main
           fetch-depth: 0
+      - name: Require successful CI for the release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ needs.validate-version.outputs.sha }}
+        run: |
+          set -euo pipefail
+          CHECKS="$(gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$EXPECTED_SHA/check-runs?per_page=100" --jq '.check_runs[] | {name, head_sha, status, conclusion, started_at}' | jq -s '.')"
+          GATE="$(jq -r --arg sha "$EXPECTED_SHA" '[.[] | select(.name == "full-ci / CI Gate" and .head_sha == $sha)] | sort_by(.started_at) | last // {} | if .status == "completed" and .conclusion == "success" then "success" else (.conclusion // .status // "missing") end' <<< "$CHECKS")"
+          if [[ "$GATE" != success ]]; then
+            echo "::error::CI Gate for $EXPECTED_SHA is '$GATE'. Wait for CI to succeed before release."
+            exit 1
+          fi
       - name: Create immutable tag or verify the existing tag
         env:
           TAG: ${{ needs.validate-version.outputs.tag }}
@@ -158,11 +153,215 @@ jobs:
             echo "::error::Tag $TAG resolves to $ACTUAL_SHA, expected $EXPECTED_SHA. No overwrite was attempted."
             exit 1
           fi
-      - name: Dispatch tag-scoped Release workflow
+
+  prepare-release:
+    name: Prepare changelog and publish Release
+    needs: [validate-version, create-tag]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.validate-version.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Inspect existing Release for safe retry
+        id: existing
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.validate-version.outputs.tag }}
+          TAG_SHA: ${{ needs.validate-version.outputs.sha }}
         run: |
-          gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches" \
-            -f event_type=release-tag-created \
-            -F "client_payload[tag]=$TAG"
+          set -euo pipefail
+          RELEASE_JSON=''
+          if ! RELEASE_JSON="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" 2>&1)"; then
+            if ! grep -q 'HTTP 404' <<< "$RELEASE_JSON"; then
+              echo '::error::Could not determine Release state. No write was attempted; inspect GitHub and retry.'
+              exit 1
+            fi
+            RELEASE_JSON=''
+          fi
+
+          RELEASE_FILE='-'
+          if [[ -n "$RELEASE_JSON" ]]; then
+            RELEASE_FILE="$RUNNER_TEMP/release.json"
+            printf '%s' "$RELEASE_JSON" > "$RELEASE_FILE"
+          fi
+          ACTION="$(php scripts/ReleaseVersion.php --release-state "$TAG" "$TAG_SHA" "$TAG_SHA" "$RELEASE_FILE")"
+          if [[ "$ACTION" == resume-release ]]; then
+            echo 'exists=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'exists=true' >> "$GITHUB_OUTPUT"
+            if [[ "$ACTION" == draft-exists ]]; then
+              echo "::error::A draft exists; inspect its notes and publish or remove it before retrying."
+              exit 1
+            else
+              echo "Release $TAG is already published; no duplicate was created."
+            fi
+          fi
+
+      - name: Set up PHP
+        if: steps.existing.outputs.exists == 'false'
+        uses: shivammathur/setup-php@8358ee0e2e8afe63c2fb8253d1d52085811ab1e5 # v2
+        with:
+          php-version: '8.4'
+          coverage: none
+
+      - name: Generate changelog and release notes
+        if: steps.existing.outputs.exists == 'false'
+        env:
+          TAG: ${{ needs.validate-version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          composer changelog
+          cp CHANGELOG.md "$RUNNER_TEMP/generated-CHANGELOG.md"
+          awk -v tag="$TAG" '
+            index($0, "## [" tag "]") == 1 { in_release = 1; next }
+            in_release && index($0, "## [") == 1 { exit }
+            in_release && index($0, "]: https://") > 0 { exit }
+            in_release { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/version-changelog.md"
+          test -s "$RUNNER_TEMP/version-changelog.md"
+          {
+            printf '# Release %s\n\n' "$TAG"
+            printf '迁移及安全配置说明：[升级迁移指南](https://github.com/%s/blob/%s/docs/migration.md)。\n\n' "$GITHUB_REPOSITORY" "$TAG"
+            cat "$RUNNER_TEMP/version-changelog.md"
+          } > "$RUNNER_TEMP/release-notes.md"
+
+      - name: Create changelog pull request and run its CI
+        id: changelog
+        if: steps.existing.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate-version.outputs.tag }}
+          TAG_SHA: ${{ needs.validate-version.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin main --prune
+          git merge-base --is-ancestor "$TAG_SHA" origin/main
+          git show origin/main:CHANGELOG.md > "$RUNNER_TEMP/main-CHANGELOG.md"
+          if grep -Fq "## [$TAG]" "$RUNNER_TEMP/main-CHANGELOG.md"; then
+            echo 'pending=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! git diff --quiet "$TAG_SHA" origin/main -- CHANGELOG.md; then
+            echo '::error::CHANGELOG.md changed on main after the release tag; reconcile it before continuing.'
+            exit 1
+          fi
+
+          BRANCH="release/changelog-$TAG"
+          PR_NUMBER="$(gh pr list --base main --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if [[ -n "$PR_NUMBER" ]]; then
+            PR_SHA="$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid')"
+            git fetch origin "$BRANCH"
+            git show "$PR_SHA:CHANGELOG.md" > "$RUNNER_TEMP/pr-CHANGELOG.md"
+            if ! cmp -s "$RUNNER_TEMP/generated-CHANGELOG.md" "$RUNNER_TEMP/pr-CHANGELOG.md"; then
+              echo "::error::Existing changelog PR #$PR_NUMBER differs from generated output. Resolve it before retrying."
+              exit 1
+            fi
+          else
+            if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
+              git fetch origin "$BRANCH"
+              git show FETCH_HEAD:CHANGELOG.md > "$RUNNER_TEMP/pr-CHANGELOG.md"
+              cmp -s "$RUNNER_TEMP/generated-CHANGELOG.md" "$RUNNER_TEMP/pr-CHANGELOG.md" || { echo '::error::Existing branch has different changelog content.'; exit 1; }
+            else
+              git switch --create "$BRANCH" origin/main
+              cp "$RUNNER_TEMP/generated-CHANGELOG.md" CHANGELOG.md
+              git config user.name 'github-actions[bot]'
+              git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+              git add CHANGELOG.md
+              git commit -m "docs(changelog): update $TAG release notes"
+              git push origin "$BRANCH"
+            fi
+            PR_URL="$(gh pr create --base main --head "$BRANCH" --title "docs(changelog): update $TAG release notes" --body "Generated from the commits in $TAG. Generated as part of the automated release workflow.")"
+            PR_NUMBER="${PR_URL##*/}"
+          fi
+
+          git fetch origin "$BRANCH"
+          if [[ "$(git diff --name-only origin/main...FETCH_HEAD)" != 'CHANGELOG.md' ]]; then
+            echo '::error::Changelog branch must change only CHANGELOG.md.'
+            exit 1
+          fi
+          gh workflow run CI --ref "$BRANCH"
+          RUN_ID=''
+          for _ in $(seq 1 60); do
+            RUN_ID="$(gh run list --workflow ci.yml --branch "$BRANCH" --event workflow_dispatch --limit 10 --json databaseId,headSha | jq -r --arg sha "$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid')" '.[] | select(.headSha == $sha) | .databaseId' | head -n 1)"
+            [[ -n "$RUN_ID" ]] && break
+            sleep 10
+          done
+          if [[ -z "$RUN_ID" ]]; then
+            echo '::error::Timed out waiting for changelog PR CI.'
+            exit 1
+          fi
+          gh run watch "$RUN_ID" --exit-status
+          gh pr merge "$PR_NUMBER" --squash --match-head-commit "$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid')"
+          echo "pending=false" >> "$GITHUB_OUTPUT"
+
+      - name: Confirm changelog has reached main
+        if: steps.existing.outputs.exists == 'false' && steps.changelog.outputs.pending != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate-version.outputs.tag }}
+          TAG_SHA: ${{ needs.validate-version.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin main --prune
+          git show origin/main:CHANGELOG.md > "$RUNNER_TEMP/main-CHANGELOG.md"
+          grep -Fq "## [$TAG]" "$RUNNER_TEMP/main-CHANGELOG.md"
+
+      - name: Publish GitHub Release
+        if: steps.existing.outputs.exists == 'false' && steps.changelog.outputs.pending != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate-version.outputs.tag }}
+          TAG_SHA: ${{ needs.validate-version.outputs.sha }}
+        run: |
+          set -euo pipefail
+          VERSION_CORE="${TAG#v}"
+          VERSION_CORE="${VERSION_CORE%%+*}"
+          RELEASE_ARGS=(--verify-tag --title "$TAG" --target "$TAG_SHA" --notes-file "$RUNNER_TEMP/release-notes.md")
+          if [[ "$VERSION_CORE" == *-* ]]; then
+            RELEASE_ARGS+=(--prerelease)
+          fi
+          if gh release create "$TAG" "${RELEASE_ARGS[@]}"; then
+            echo "Published Release $TAG."
+          else
+            if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > "$RUNNER_TEMP/created-release.json" 2>/dev/null \
+                && [[ "$(php scripts/ReleaseVersion.php --release-state "$TAG" "$TAG_SHA" "$TAG_SHA" "$RUNNER_TEMP/created-release.json")" == published-exists ]]; then
+              echo "Release creation returned an error, but GitHub confirms the matching Release exists; no second Release was created."
+            else
+              echo '::error::Release creation outcome is unresolved. Inspect the tag and Release state before retrying.'
+              exit 1
+            fi
+          fi
+
+
+      - name: Wait for Packagist to resolve the tag to its commit
+        env:
+          TAG: ${{ needs.validate-version.outputs.tag }}
+          SHA: ${{ needs.validate-version.outputs.sha }}
+        run: php scripts/PackagistReleaseCheck.php "$TAG" "$SHA"
+
+      - uses: shivammathur/setup-php@8358ee0e2e8afe63c2fb8253d1d52085811ab1e5 # v2
+        with:
+          php-version: '8.4'
+          extensions: gmp, openssl
+          tools: composer:v2
+          coverage: none
+
+      - name: Install the published version in a clean Composer project
+        env:
+          TAG: ${{ needs.validate-version.outputs.tag }}
+          EXPECTED_SHA: ${{ needs.validate-version.outputs.sha }}
+        run: |
+          set -euo pipefail
+          PROJECT="$RUNNER_TEMP/crypto-sm-packagist-check"
+          mkdir -p "$PROJECT"
+          cd "$PROJECT"
+          VERSION="${TAG#v}"
+          printf '{"name":"crypto-sm/release-check","minimum-stability":"dev","prefer-stable":true,"require":{"pohoc/crypto-sm":"%s"}}\n' "$VERSION" > composer.json
+          composer update --no-interaction --no-progress --prefer-dist
+          php "$GITHUB_WORKSPACE/scripts/PackagistReleaseCheck.php" --lock "$TAG" "$EXPECTED_SHA"
